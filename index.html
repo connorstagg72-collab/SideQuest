@@ -77,13 +77,22 @@ const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign,
    the Row Level Security policies created in schema.sql.
    ============================================================ */
 
-// --- Paste your Supabase values here --------------------------------
+// --- Your Supabase project ------------------------------------------
 const SUPABASE_URL = "https://sdhqrguosxeyifjbrinq.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_6_jwDsn_jbD2Z6gfX16wAw_1enaa6Od";
-// The anon key is meant to be public in the browser — your data is
-// protected by the Row Level Security rules in schema.sql.
-// Full setup steps are in SETUP.md (skip the npm / Vite parts for this
-// single-file build; the Supabase dashboard steps are identical).
+// The anon/publishable key is meant to be public in the browser — your
+// data is protected by the Row Level Security rules in schema.sql.
+// (Double-check this key matches your working copy; it was read from an image.)
+// --------------------------------------------------------------------
+
+// --- Payments (Stripe, via Supabase Edge Functions) -----------------
+// When true: posting a quest goes through Stripe Checkout, and workers
+// cash out via Stripe Connect. The card + secret-key logic lives in the
+// edge functions in supabase/functions/ — deploy them first (STRIPE_SETUP.md).
+// Flip to false to use the app without payments while you set Stripe up.
+const PAYMENTS_ENABLED = true;
+// Optional platform fee added on top of the payout at checkout (0 = none).
+const PLATFORM_FEE_PCT = 0;
 // --------------------------------------------------------------------
 
 // Live board updates across devices. schema.sql enables Realtime for the
@@ -114,6 +123,11 @@ function rowToProfile(r) {
     lastDone: r.last_done || null,
     completedCount: r.completed_count || 0,
     totalEarned: Number(r.total_earned) || 0,
+    homeLat: r.home_lat != null ? Number(r.home_lat) : null,
+    homeLng: r.home_lng != null ? Number(r.home_lng) : null,
+    stripeAccountId: r.stripe_account_id || null,
+    payoutsEnabled: !!r.payouts_enabled,
+    paidOut: Number(r.paid_out) || 0,
   };
 }
 function rowToJob(r) {
@@ -129,6 +143,8 @@ function rowToJob(r) {
     scheduledTime: r.scheduled_time != null ? Number(r.scheduled_time) : null,
     steps: Array.isArray(r.steps) ? r.steps : [],
     completedAt: r.completed_at != null ? Number(r.completed_at) : null,
+    lat: r.latitude != null ? Number(r.latitude) : null,
+    lng: r.longitude != null ? Number(r.longitude) : null,
   };
 }
 function profilePatchToRow(p) {
@@ -141,6 +157,8 @@ function profilePatchToRow(p) {
   if ("lastDone" in p) r.last_done = p.lastDone;
   if ("completedCount" in p) r.completed_count = p.completedCount;
   if ("totalEarned" in p) r.total_earned = p.totalEarned;
+  if ("homeLat" in p) r.home_lat = p.homeLat;
+  if ("homeLng" in p) r.home_lng = p.homeLng;
   return r;
 }
 function jobPatchToRow(p) {
@@ -159,6 +177,8 @@ function jobPatchToRow(p) {
   if ("scheduledTime" in p) r.scheduled_time = p.scheduledTime;
   if ("steps" in p) r.steps = p.steps;
   if ("completedAt" in p) r.completed_at = p.completedAt;
+  if ("lat" in p) r.latitude = p.lat;
+  if ("lng" in p) r.longitude = p.lng;
   return r;
 }
 
@@ -233,6 +253,76 @@ async function dbUpdateProfile(id, appPatch) {
     .from("profiles").update(profilePatchToRow(appPatch)).eq("id", id);
   if (error) console.error("updateProfile", error);
   return { error };
+}
+
+/* ---------- location helpers ---------- */
+// Free geocoding via OpenStreetMap Nominatim. Fine for low volume; for heavy
+// use, swap in a paid geocoder or move this into an edge function.
+async function geocodeAddress(q) {
+  if (!q || !q.trim()) return null;
+  try {
+    const res = await fetch(
+      "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=0&q=" +
+        encodeURIComponent(q.trim()),
+      { headers: { Accept: "application/json" } }
+    );
+    const arr = await res.json();
+    if (arr && arr[0]) return { lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon), label: arr[0].display_name };
+  } catch (e) { console.error("geocode", e); }
+  return null;
+}
+async function reverseGeocode(lat, lng) {
+  try {
+    const res = await fetch(
+      "https://nominatim.openstreetmap.org/reverse?format=json&zoom=14&lat=" + lat + "&lon=" + lng,
+      { headers: { Accept: "application/json" } }
+    );
+    const j = await res.json();
+    if (j && j.display_name) return j.display_name;
+  } catch (e) {}
+  return null;
+}
+function getCurrentPosition() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: false, timeout: 9000, maximumAge: 60000 }
+    );
+  });
+}
+function milesBetween(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return null;
+  const R = 3958.8, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+function fmtMiles(mi) {
+  if (mi == null) return "";
+  if (mi < 0.1) return "here";
+  if (mi < 10) return mi.toFixed(1) + " mi";
+  return Math.round(mi) + " mi";
+}
+
+/* ---------- edge-function caller (Stripe logic lives server-side) ---------- */
+async function callFn(name, body) {
+  const { data } = await supabase.auth.getSession();
+  const token = data && data.session ? data.session.access_token : null;
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + (token || SUPABASE_ANON_KEY),
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body || {}),
+  });
+  let json = null;
+  try { json = await res.json(); } catch (e) {}
+  if (!res.ok) throw new Error((json && (json.error || json.message)) || "Request failed (" + res.status + ")");
+  return json || {};
 }
 
 /* ---------- synthesized sound (Web Audio) ---------- */
@@ -670,12 +760,26 @@ function PostQuestForm() {
   const [cat, setCat] = useState("Cleanup");
   const [desc, setDesc] = useState("");
   const [loc, setLoc] = useState("");
+  const [coords, setCoords] = useState(null);
+  const [locBusy, setLocBusy] = useState(false);
   const [effort, setEffort] = useState("Medium");
   const [est, setEst] = useState("");
   const [payout, setPayout] = useState(user.settings?.defaultPayout || 60);
   const [deadline, setDeadline] = useState(toLocalInput(Date.now() + 2 * DAY));
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const totalCharge = Math.max(0, Math.round(Number(payout || 0) * (1 + PLATFORM_FEE_PCT / 100)));
+
+  async function useMyLocation() {
+    setLocBusy(true);
+    const p = await getCurrentPosition();
+    if (!p) { setLocBusy(false); toast("Couldn't get your location — type an address instead.", "info"); return; }
+    setCoords({ lat: p.lat, lng: p.lng });
+    const label = await reverseGeocode(p.lat, p.lng);
+    setLoc(label || `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`);
+    setLocBusy(false);
+  }
 
   async function submit() {
     if (busy) return;
@@ -684,14 +788,27 @@ function PostQuestForm() {
     if (Number(payout) <= 0) { play("error"); return setErr("Set a payout above $0."); }
     const dl = new Date(deadline).getTime();
     if (!dl || dl < Date.now()) { play("error"); return setErr("Pick a deadline in the future."); }
+
+    // Resolve coordinates from the typed address if we don't have them yet.
+    let lat = coords ? coords.lat : null, lng = coords ? coords.lng : null;
+    const locText = loc.trim();
+    if (locText && lat == null && !/^remote/i.test(locText)) {
+      setLocBusy(true);
+      const g = await geocodeAddress(locText);
+      setLocBusy(false);
+      if (g) { lat = g.lat; lng = g.lng; setCoords({ lat, lng }); }
+    }
+
     setBusy(true);
     const ok = await postJob({
-      title: title.trim(), category: cat, desc: desc.trim(), location: loc.trim(),
+      title: title.trim(), category: cat, desc: desc.trim(), location: locText,
       effort, estTime: est.trim() || "Flexible", payout: Number(payout), deadline: dl,
+      lat, lng,
     });
     setBusy(false);
+    // In payments mode postJob redirects to Stripe (returns falsey) — don't clear here.
     if (!ok) return;
-    setTitle(""); setDesc(""); setLoc(""); setEst("");
+    setTitle(""); setDesc(""); setLoc(""); setEst(""); setCoords(null);
     toast("Quest posted — it's live on the board.", "success");
   }
 
@@ -714,7 +831,18 @@ function PostQuestForm() {
       </label>
 
       <div className="grid-2">
-        <Field label="Location" placeholder="Address or 'Remote'" value={loc} onChange={e => setLoc(e.target.value)} />
+        <div className="field">
+          <span className="field-label">Location</span>
+          <div className="loc-input">
+            <input className="field-input" placeholder="Address or 'Remote'" value={loc}
+              onChange={e => { setLoc(e.target.value); setCoords(null); }} />
+            <button type="button" className="loc-btn" onClick={useMyLocation} disabled={locBusy}
+              title="Use my current location" aria-label="Use my current location">
+              <MapPin size={15} strokeWidth={2.4} />
+            </button>
+          </div>
+          {coords && <span className="field-hint">📍 Pinned — workers nearby will see this quest</span>}
+        </div>
         <Field label="Rough time estimate" placeholder="e.g. 2–3 hrs" value={est} onChange={e => setEst(e.target.value)} />
       </div>
 
@@ -735,7 +863,10 @@ function PostQuestForm() {
       </div>
 
       {err && <div className="auth-err"><X size={14} strokeWidth={3} />{err}</div>}
-      <Btn full size="lg" icon={Rocket} onClick={submit} disabled={busy} sound="claim">{busy ? "Posting…" : "Post quest to the board"}</Btn>
+      <Btn full size="lg" icon={Rocket} onClick={submit} disabled={busy || locBusy} sound="claim">
+        {busy ? "Starting checkout…" : PAYMENTS_ENABLED ? `Pay ${money(totalCharge)} & post quest` : "Post quest to the board"}
+      </Btn>
+      {PAYMENTS_ENABLED && <p className="pay-note">Secure checkout via Stripe. Your quest goes live the moment payment succeeds.</p>}
     </div>
   );
 }
@@ -775,7 +906,9 @@ function ClientJobCard({ job }) {
 }
 function ClientHome() {
   const { user, jobs, view } = useApp();
-  const mine = jobs.filter(j => j.postedBy === user.id).sort((a, b) => b.createdAt - a.createdAt);
+  const mine = jobs
+    .filter(j => j.postedBy === user.id && j.status !== "pending_payment")
+    .sort((a, b) => b.createdAt - a.createdAt);
   const open = mine.filter(j => j.status === "open").length;
   const claimed = mine.filter(j => j.status === "claimed").length;
   const done = mine.filter(j => j.status === "completed").length;
@@ -828,7 +961,7 @@ function Empty({ icon: Icon, title, body }) {
     </div>
   );
 }
-function BrowseCard({ job }) {
+function BrowseCard({ job, distance }) {
   const { user, claimJob } = useApp();
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState(toLocalInput(Math.min(Date.now() + HOUR, job.deadline)));
@@ -855,6 +988,7 @@ function BrowseCard({ job }) {
       <div className="payout-big">{money(job.payout)}<span> flat</span></div>
       <div className="jc-meta">
         {job.location && <span className="meta-i"><MapPin size={13} />{job.location}</span>}
+        {distance != null && <span className="meta-i dist-i"><Target size={12} strokeWidth={2.6} />{fmtMiles(distance)} away</span>}
         {job.estTime && <span className="meta-i"><Clock size={13} />{job.estTime}</span>}
         <Countdown to={job.deadline} />
       </div>
@@ -947,15 +1081,55 @@ function RewardCard({ icon: Icon, title, body, earned }) {
   );
 }
 function WorkerHome() {
-  const { user, jobs, view, setEnergy, refreshJobs } = useApp();
+  const { user, jobs, view, setEnergy, refreshJobs, saveSettings, setHomeLocation, toast } = useApp();
   const [cat, setCat] = useState("All");
   const [q, setQ] = useState("");
+  const [addr, setAddr] = useState(user.settings?.locLabel || "");
+  const [locBusy, setLocBusy] = useState(false);
+
+  const myLoc = user.homeLat != null ? { lat: user.homeLat, lng: user.homeLng } : null;
+  const radius = user.settings?.radius || 25;
+  const useDist = !!user.settings?.filterByDistance;
+
+  async function applyAddress() {
+    if (!addr.trim()) return;
+    setLocBusy(true);
+    const g = await geocodeAddress(addr);
+    setLocBusy(false);
+    if (!g) { toast("Couldn't find that address — try being more specific.", "info"); return; }
+    setHomeLocation(g.lat, g.lng);
+    saveSettings({ locLabel: addr.trim() });
+    toast("Location set — sorting by distance.", "success");
+  }
+  async function useMyLocation() {
+    setLocBusy(true);
+    const p = await getCurrentPosition();
+    if (!p) { setLocBusy(false); toast("Couldn't get your location — type an address instead.", "info"); return; }
+    setHomeLocation(p.lat, p.lng);
+    const label = await reverseGeocode(p.lat, p.lng);
+    const shown = label || `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`;
+    setLocBusy(false);
+    setAddr(shown);
+    saveSettings({ locLabel: shown });
+    toast("Location set — sorting by distance.", "success");
+  }
 
   const open = jobs.filter(j => j.status === "open");
-  const filtered = open.filter(j =>
+  const decorated = open.map(j => ({
+    job: j,
+    mi: (myLoc && j.lat != null) ? milesBetween(myLoc, { lat: j.lat, lng: j.lng }) : null,
+  }));
+  const filtered = decorated.filter(({ job: j, mi }) =>
     (cat === "All" || j.category === cat) &&
-    (!q || (j.title + j.desc + j.location).toLowerCase().includes(q.toLowerCase()))
-  ).sort((a, b) => a.deadline - b.deadline);
+    (!q || (j.title + j.desc + j.location).toLowerCase().includes(q.toLowerCase())) &&
+    (!useDist || !myLoc || mi == null || mi <= radius)
+  ).sort((a, b) => {
+    if (useDist && myLoc) {
+      const am = a.mi == null ? Infinity : a.mi, bm = b.mi == null ? Infinity : b.mi;
+      if (am !== bm) return am - bm;
+    }
+    return a.job.deadline - b.job.deadline;
+  });
 
   const myTasks = jobs.filter(j => j.claimedBy === user.id).sort((a, b) => (a.scheduledTime || 0) - (b.scheduledTime || 0));
   const active = myTasks.filter(j => j.status === "claimed");
@@ -1035,6 +1209,29 @@ function WorkerHome() {
         {ENERGIES.map(e => <Chip key={e} active={(user.settings?.energy) === e} onClick={() => setEnergy(e)}>{e}</Chip>)}
       </div>
 
+      <div className="loc-bar">
+        <div className="loc-bar-row">
+          <MapPin size={15} strokeWidth={2.4} />
+          <input className="loc-bar-input" placeholder="Your address or area" value={addr}
+            onChange={e => setAddr(e.target.value)} onKeyDown={e => e.key === "Enter" && applyAddress()} />
+          <button className="loc-mini" onClick={applyAddress} disabled={locBusy}>{locBusy ? "…" : "Set"}</button>
+          <button className="loc-mini ghost" onClick={useMyLocation} disabled={locBusy} title="Use current location">
+            <Target size={14} strokeWidth={2.6} />
+          </button>
+        </div>
+        {myLoc && (
+          <div className="radius-row">
+            <label className="rad-check">
+              <input type="checkbox" checked={useDist} onChange={e => saveSettings({ filterByDistance: e.target.checked })} />
+              <span>Within</span>
+            </label>
+            <input className="rad-range" type="range" min="1" max="100" value={radius}
+              onChange={e => saveSettings({ radius: Number(e.target.value) })} />
+            <span className="rad-val">{radius} mi</span>
+          </div>
+        )}
+      </div>
+
       <div className="search-row">
         <div className="search"><Search size={16} /><input placeholder="Search quests…" value={q} onChange={e => setQ(e.target.value)} /></div>
       </div>
@@ -1044,8 +1241,8 @@ function WorkerHome() {
       </div>
 
       {filtered.length === 0
-        ? <Empty icon={Search} title="No open quests here" body="Try another category, or check back in a bit — new quests land all the time." />
-        : <div className="jobgrid">{filtered.map(j => <BrowseCard key={j.id} job={j} />)}</div>}
+        ? <Empty icon={Search} title="No open quests here" body="Try another category or a wider radius — new quests land all the time." />
+        : <div className="jobgrid">{filtered.map(({ job: j, mi }) => <BrowseCard key={j.id} job={j} distance={mi} />)}</div>}
     </div>
   );
 }
@@ -1064,10 +1261,36 @@ function Toggle({ on, onChange, label, hint, icon: Icon }) {
   );
 }
 function SettingsScreen() {
-  const { user, saveSettings, logout } = useApp();
+  const { user, saveSettings, logout, toast, refreshProfile } = useApp();
   const s = user.settings || {};
   const [name, setName] = useState(user.name);
+  const [busyPay, setBusyPay] = useState(false);
   const set = patch => saveSettings(patch);
+  const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
+
+  async function connectPayouts() {
+    setBusyPay(true);
+    try {
+      const origin = window.location.origin + window.location.pathname;
+      const { url } = await callFn("stripe-connect", {
+        action: "onboard",
+        returnUrl: origin + "?connect=done",
+        refreshUrl: origin + "?connect=refresh",
+      });
+      if (url) { window.location.href = url; return; }
+      toast("Couldn't start payout setup. Try again.", "error");
+    } catch (e) { toast(e.message || "Couldn't start payout setup.", "error"); }
+    setBusyPay(false);
+  }
+  async function cashOut() {
+    setBusyPay(true);
+    try {
+      const r = await callFn("stripe-connect", { action: "payout" });
+      toast(`Cashed out ${money(r.amount || available)} 🎉`, "success");
+      await refreshProfile();
+    } catch (e) { toast(e.message || "Cash out failed.", "error"); }
+    setBusyPay(false);
+  }
 
   return (
     <div className="page page-narrow">
@@ -1097,6 +1320,33 @@ function SettingsScreen() {
         <Toggle icon={s.soundOn ? Volume2 : VolumeX} label="Sound effects" hint="Clicks, pops & little fanfares"
           on={s.soundOn} onChange={v => set({ soundOn: v })} />
       </div>
+
+      {user.type === "worker" && (
+        <div className="card set-card">
+          <h2 className="set-h"><DollarSign size={17} /> Earnings & payouts</h2>
+          <div className="cashout-box">
+            <div className="cashout-amt">{money(available)}</div>
+            <div className="cashout-sub">available to cash out · {money(user.totalEarned || 0)} earned all-time</div>
+          </div>
+          {!PAYMENTS_ENABLED ? (
+            <p className="set-p">Payouts are turned off in this build.</p>
+          ) : !user.payoutsEnabled ? (
+            <>
+              <Btn variant="primary" icon={DollarSign} onClick={connectPayouts} disabled={busyPay}>
+                {busyPay ? "Opening Stripe…" : "Set up payouts with Stripe"}
+              </Btn>
+              <p className="auth-fine">You'll link a bank account through Stripe's secure onboarding. Stripe handles identity and bank details — SideQuest never sees them.</p>
+            </>
+          ) : (
+            <>
+              <Btn variant="success" icon={DollarSign} onClick={cashOut} disabled={busyPay || available <= 0}>
+                {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
+              </Btn>
+              <p className="auth-fine">Payouts arrive in your bank on Stripe's normal schedule. <button className="linklike" onClick={connectPayouts}>Manage payout account</button></p>
+            </>
+          )}
+        </div>
+      )}
 
       {user.type === "worker" && (
         <div className="card set-card">
@@ -1372,6 +1622,33 @@ function App() {
     if (!res.error) setJobs(res.jobs);
   }
   async function postJob(data) {
+    // Payments on: create a Stripe Checkout session via the edge function and
+    // redirect. The job is created server-side as 'pending_payment' and flips
+    // to 'open' when the Stripe webhook confirms the charge.
+    if (PAYMENTS_ENABLED) {
+      try {
+        const origin = window.location.origin + window.location.pathname;
+        const { url } = await callFn("stripe-checkout", {
+          job: {
+            title: data.title, category: data.category, desc: data.desc || "",
+            location: data.location || "", effort: data.effort, estTime: data.estTime || "",
+            payout: data.payout, deadline: data.deadline,
+            lat: data.lat != null ? data.lat : null,
+            lng: data.lng != null ? data.lng : null,
+          },
+          feePct: PLATFORM_FEE_PCT,
+          successUrl: origin + "?paid=1",
+          cancelUrl: origin + "?canceled=1",
+        });
+        if (url) { window.location.href = url; return false; } // redirecting away
+        toast("Couldn't start checkout. Try again.", "error");
+        return false;
+      } catch (e) {
+        toast(e.message || "Payment setup failed — is the edge function deployed?", "error");
+        return false;
+      }
+    }
+    // Payments off: insert directly (handy while setting Stripe up).
     const row = {
       status: "open",
       title: data.title, category: data.category, description: data.desc || "",
@@ -1380,6 +1657,8 @@ function App() {
       posted_by: user.id, posted_by_name: user.name,
       claimed_by: null, claimed_by_name: null,
       scheduled_time: null, steps: [], completed_at: null,
+      latitude: data.lat != null ? data.lat : null,
+      longitude: data.lng != null ? data.lng : null,
     };
     const { job, error } = await dbInsertJob(row);
     if (error || !job) { toast("Couldn't post that quest — try again.", "error"); return false; }
@@ -1441,10 +1720,35 @@ function App() {
   }
   function refreshJobs() { (async () => { await reloadJobs(); toast("Board refreshed.", "info"); })(); }
 
+  function setHomeLocation(lat, lng) {
+    updateUser({ homeLat: lat, homeLng: lng });
+  }
+  async function refreshProfile() {
+    if (!user) return;
+    const { profile } = await dbFetchProfile(user.id);
+    if (profile) setUser(profile);
+  }
+
+  // Handle returns from Stripe Checkout / Connect onboarding (query flags).
+  useEffect(() => {
+    if (phase !== "app") return;
+    const p = new URLSearchParams(window.location.search);
+    let changed = false;
+    if (p.get("paid") === "1") { toast("Payment received — your quest is live! 🎉", "success"); reloadJobs(); changed = true; }
+    if (p.get("canceled") === "1") { toast("Checkout canceled — quest wasn't posted.", "info"); changed = true; }
+    if (p.get("connect") === "done") { toast("Payouts connected — you can cash out now.", "success"); refreshProfile(); changed = true; }
+    if (p.get("connect") === "refresh") { toast("Almost there — finish your payout setup.", "info"); changed = true; }
+    if (changed) {
+      try { window.history.replaceState({}, "", window.location.origin + window.location.pathname); } catch (e) {}
+    }
+    /* eslint-disable-next-line */
+  }, [phase]);
+
   const value = {
     user, jobs, view, setView, now, ui, setUi,
     signup, login, demoLogin, logout, postJob, deleteJob, claimJob, setSteps, completeJob,
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
+    setHomeLocation, refreshProfile,
   };
 
   return (
@@ -1678,6 +1982,33 @@ em{font-style:normal;color:var(--primary)}
 .cfg-reload{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:13px;border:1px solid var(--line2);background:linear-gradient(180deg,var(--primary),var(--primary-d));color:#fff;font-family:var(--font);font-weight:700;font-size:14.5px;cursor:pointer;box-shadow:var(--glow);transition:transform .12s ease,filter .12s ease}
 .cfg-reload:hover{filter:brightness(1.07)}
 .cfg-reload:active{transform:translateY(1px)}
+
+/* location + payments UI */
+.loc-input{display:flex;gap:8px;align-items:stretch}
+.loc-input .field-input{flex:1}
+.loc-btn{flex:none;width:44px;border-radius:12px;border:1px solid var(--line2);background:var(--card2);color:var(--primary);display:grid;place-items:center;cursor:pointer;transition:background .12s ease,transform .1s ease}
+.loc-btn:hover{background:var(--primary-l)}
+.loc-btn:active{transform:translateY(1px)}
+.loc-btn:disabled{opacity:.5;cursor:default}
+.pay-note{font-size:12px;color:var(--muted);text-align:center;margin:8px 0 0}
+.dist-i{color:var(--mint)!important;font-weight:700}
+.loc-bar{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;margin-bottom:12px}
+.loc-bar-row{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.loc-bar-input{flex:1;background:transparent;border:none;outline:none;color:var(--ink);font-family:var(--font);font-size:14px;font-weight:600}
+.loc-bar-input::placeholder{color:var(--muted)}
+.loc-mini{flex:none;border:1px solid var(--line2);background:var(--card2);color:var(--ink);font-family:var(--font);font-weight:700;font-size:13px;padding:7px 12px;border-radius:10px;cursor:pointer;display:grid;place-items:center}
+.loc-mini.ghost{color:var(--primary);padding:7px 10px}
+.loc-mini:hover{border-color:var(--primary)}
+.loc-mini:disabled{opacity:.5;cursor:default}
+.radius-row{display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.rad-check{display:flex;align-items:center;gap:6px;font-size:13.5px;font-weight:700;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.rad-check input{width:16px;height:16px;accent-color:var(--primary)}
+.rad-range{flex:1;accent-color:var(--primary)}
+.rad-val{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--primary);white-space:nowrap;min-width:46px;text-align:right}
+.cashout-box{background:var(--primary-l);border:1px solid var(--line2);border-radius:14px;padding:14px 16px;margin-bottom:12px}
+.cashout-amt{font-family:var(--mono);font-size:30px;font-weight:700;color:var(--mint);line-height:1}
+.cashout-sub{font-size:12.5px;color:var(--muted);margin-top:5px;font-weight:600}
+.linklike{background:none;border:none;padding:0;color:var(--primary);font:inherit;font-weight:700;cursor:pointer;text-decoration:underline}
 
 /* ===== NAV ===== */
 .nav{position:sticky;top:0;z-index:40;background:rgba(12,6,8,.78);backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
