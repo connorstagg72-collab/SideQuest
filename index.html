@@ -145,6 +145,8 @@ function rowToJob(r) {
     completedAt: r.completed_at != null ? Number(r.completed_at) : null,
     lat: r.latitude != null ? Number(r.latitude) : null,
     lng: r.longitude != null ? Number(r.longitude) : null,
+    releaseNote: r.release_note || "",
+    releaseReason: r.release_reason || "",
   };
 }
 function profilePatchToRow(p) {
@@ -179,6 +181,8 @@ function jobPatchToRow(p) {
   if ("completedAt" in p) r.completed_at = p.completedAt;
   if ("lat" in p) r.latitude = p.lat;
   if ("lng" in p) r.longitude = p.lng;
+  if ("releaseNote" in p) r.release_note = p.releaseNote;
+  if ("releaseReason" in p) r.release_reason = p.releaseReason;
   return r;
 }
 
@@ -306,6 +310,44 @@ function fmtMiles(mi) {
   return Math.round(mi) + " mi";
 }
 
+/* ---------- theme (accent color → dark palette) ---------- */
+function hexToHue(hex) {
+  let h = String(hex || "").replace("#", "");
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16) / 255, g = parseInt(h.slice(2, 4), 16) / 255, b = parseInt(h.slice(4, 6), 16) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let hue = 0;
+  if (d !== 0) {
+    if (mx === r) hue = ((g - b) / d) % 6;
+    else if (mx === g) hue = (b - r) / d + 2;
+    else hue = (r - g) / d + 4;
+    hue = hue * 60; if (hue < 0) hue += 360;
+  }
+  return { hue, sat: mx === 0 ? 0 : d / mx };
+}
+// Pass a hex to theme the app; pass null/empty to restore the default crimson.
+function applyTheme(hex) {
+  const root = document.documentElement.style;
+  const keys = ["--bg","--bg2","--void","--card","--card2","--line","--line2",
+    "--primary","--primary-d","--primary-l","--accent","--accent-l","--ember",
+    "--pglow","--bgtint1","--bgtint2","--seltint","--ink","--ink2","--muted"];
+  if (!hex) { keys.forEach(k => root.removeProperty(k)); return; }
+  const { hue, sat } = hexToHue(hex);
+  const H = sat < 0.08 ? 222 : Math.round(hue);     // gray/white/black input → tasteful blue
+  const H2 = (H + 14) % 360;
+  const c = (s, l, a) => a == null ? `hsl(${H}, ${s}%, ${l}%)` : `hsla(${H}, ${s}%, ${l}%, ${a})`;
+  const set = {
+    "--primary": c(80, 52), "--primary-d": c(82, 40), "--primary-l": c(48, 10),
+    "--accent": c(100, 66), "--accent-l": c(45, 12), "--ember": `hsl(${H2}, 95%, 60%)`,
+    "--pglow": c(92, 55, .55),
+    "--bgtint1": c(85, 46, .20), "--bgtint2": `hsla(${H2}, 90%, 60%, .13)`, "--seltint": c(85, 46, .42),
+    "--bg": c(32, 4.5), "--bg2": c(36, 7.5), "--void": c(30, 2.5),
+    "--card": c(30, 6), "--card2": c(30, 9.5), "--line": c(34, 14), "--line2": c(38, 19),
+    "--ink": c(30, 95), "--ink2": c(26, 72), "--muted": c(22, 47),
+  };
+  Object.keys(set).forEach(k => root.setProperty(k, set[k]));
+}
+
 /* ---------- edge-function caller (Stripe logic lives server-side) ---------- */
 async function callFn(name, body) {
   const { data } = await supabase.auth.getSession();
@@ -388,6 +430,16 @@ const levelFor = xp => Math.floor((xp || 0) / 250) + 1;
 
 const CATEGORIES = ["Cleanup", "Organizing", "Moving", "Yard", "Errands", "Admin", "Delivery", "Assembly", "Pet care", "Event setup"];
 const EFFORTS = ["Light", "Medium", "Heavy"];
+const THEME_PRESETS = [
+  { name: "Crimson", hex: null,      dot: "#E6173A" },  // default
+  { name: "Ember",   hex: "#FF6B2C", dot: "#FF6B2C" },
+  { name: "Gold",    hex: "#FFC24B", dot: "#FFC24B" },
+  { name: "Emerald", hex: "#23E89B", dot: "#23E89B" },
+  { name: "Cyan",    hex: "#2BD6EE", dot: "#2BD6EE" },
+  { name: "Azure",   hex: "#3B82F6", dot: "#3B82F6" },
+  { name: "Violet",  hex: "#A855F7", dot: "#A855F7" },
+  { name: "Magenta", hex: "#EC4899", dot: "#EC4899" },
+];
 const ENERGIES = ["Low", "Medium", "High"];
 const STEP_SUGGESTIONS = {
   Cleanup: ["Grab supplies & gloves", "Clear the big debris", "Sweep the whole area", "Bag & haul the trash", "Final walkthrough"],
@@ -896,6 +948,12 @@ function ClientJobCard({ job }) {
           <CheckCircle2 size={14} /> Completed by <strong>{job.claimedByName}</strong>
         </div>
       )}
+      {job.status === "open" && job.releaseNote && (
+        <div className="note-strip">
+          <RefreshCw size={13} />
+          <span>A quester started this but couldn't finish{job.releaseReason ? ` (${job.releaseReason.toLowerCase()})` : ""} — it's back on the board. They noted: “{job.releaseNote}”</span>
+        </div>
+      )}
       {job.status === "open" && (
         <div className="jc-actions">
           <Btn variant="ghostdanger" size="sm" icon={Trash2} onClick={() => deleteJob(job.id)}>Remove</Btn>
@@ -992,7 +1050,12 @@ function BrowseCard({ job, distance }) {
         {job.estTime && <span className="meta-i"><Clock size={13} />{job.estTime}</span>}
         <Countdown to={job.deadline} />
       </div>
-
+      {job.releaseNote && (
+        <div className="note-strip">
+          <RefreshCw size={13} />
+          <span><strong>Previously attempted.</strong> Last quester noted: “{job.releaseNote}”</span>
+        </div>
+      )}
       {!open ? (
         <Btn full icon={Target} onClick={() => { setOpen(true); }} sound="pop">Claim this quest</Btn>
       ) : (
@@ -1010,8 +1073,11 @@ function BrowseCard({ job, distance }) {
   );
 }
 function TaskCard({ job }) {
-  const { setSteps, completeJob, setFocusJob } = useApp();
+  const { setSteps, completeJob, setFocusJob, releaseJob } = useApp();
   const [newStep, setNewStep] = useState("");
+  const [giveUp, setGiveUp] = useState(false);
+  const [reason, setReason] = useState("Something came up");
+  const [note, setNote] = useState("");
   const steps = job.steps || [];
   const doneCount = steps.filter(s => s.done).length;
   const pct = steps.length ? Math.round((doneCount / steps.length) * 100) : 0;
@@ -1038,6 +1104,12 @@ function TaskCard({ job }) {
       </div>
       <h3 className="jc-title">{job.title}</h3>
       <div className="sched"><Calendar size={14} /> You're doing this {fmtWhen(job.scheduledTime)} · <Countdown to={job.deadline} /></div>
+      {job.releaseNote && (
+        <div className="note-strip">
+          <RefreshCw size={13} />
+          <span><strong>Picked up after a previous attempt.</strong> They noted: “{job.releaseNote}”</span>
+        </div>
+      )}
 
       <div className="steps-head">
         <span><ListChecks size={15} /> Micro-steps</span>
@@ -1066,6 +1138,27 @@ function TaskCard({ job }) {
       <div className="task-actions">
         <Btn variant="ghost" icon={Wind} onClick={() => { play("pop"); setFocusJob(job); }}>Focus sprint</Btn>
         <Btn variant="success" icon={CheckCircle2} onClick={() => completeJob(job.id)} sound="success">Mark complete</Btn>
+      </div>
+
+      <div className="giveup">
+        {!giveUp ? (
+          <button className="giveup-link" onClick={() => setGiveUp(true)}>Can't finish this quest?</button>
+        ) : (
+          <div className="giveup-box">
+            <div className="giveup-h"><Heart size={14} /> Life happens — no penalty. This puts the quest back for someone else.</div>
+            <label className="field-label">Reason</label>
+            <select className="field-input" value={reason} onChange={e => setReason(e.target.value)}>
+              {["Something came up", "Emergency", "Ran out of time", "Too hard for me", "Other"].map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <label className="field-label">What got done so far? <span className="muted-inline">(optional — helps the client & next person)</span></label>
+            <textarea className="field-input giveup-note" rows="3" placeholder="e.g. Cleared the garage but didn't get to the shed…"
+              value={note} onChange={e => setNote(e.target.value)} />
+            <div className="giveup-actions">
+              <Btn variant="ghost" size="sm" onClick={() => setGiveUp(false)} sound="toggle">Never mind</Btn>
+              <Btn variant="ghostdanger" size="sm" icon={ArrowRight} onClick={() => releaseJob(job.id, { reason, note })} sound="toggle">Release quest</Btn>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1321,6 +1414,28 @@ function SettingsScreen() {
           on={s.soundOn} onChange={v => set({ soundOn: v })} />
       </div>
 
+      <div className="card set-card">
+        <h2 className="set-h"><Sparkles size={17} /> Appearance</h2>
+        <p className="set-p">Pick an accent color. The app keeps its dark, black-based look no matter what you choose.</p>
+        <div className="swatches">
+          {THEME_PRESETS.map(p => {
+            const active = (s.themeColor || null) === (p.hex || null);
+            return (
+              <button key={p.name} className={`swatch ${active ? "on" : ""}`} title={p.name}
+                onClick={() => { applyTheme(p.hex); set({ themeColor: p.hex }); play("pop"); }}>
+                <span className="sw-dot" style={{ background: p.dot }} />
+              </button>
+            );
+          })}
+          <label className="swatch sw-custom" title="Any color you like">
+            <span className="sw-plus"><Plus size={15} strokeWidth={3} /></span>
+            <input type="color" value={s.themeColor || "#E6173A"}
+              onChange={e => { applyTheme(e.target.value); set({ themeColor: e.target.value }); }} />
+          </label>
+        </div>
+        <div className="set-meta"><span className="cap">Current</span> {(THEME_PRESETS.find(p => (p.hex || null) === (s.themeColor || null)) || {}).name || "Custom"}</div>
+      </div>
+
       {user.type === "worker" && (
         <div className="card set-card">
           <h2 className="set-h"><DollarSign size={17} /> Earnings & payouts</h2>
@@ -1342,7 +1457,12 @@ function SettingsScreen() {
               <Btn variant="success" icon={DollarSign} onClick={cashOut} disabled={busyPay || available <= 0}>
                 {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
               </Btn>
-              <p className="auth-fine">Payouts arrive in your bank on Stripe's normal schedule. <button className="linklike" onClick={connectPayouts}>Manage payout account</button></p>
+              <div className="payout-info">
+                <div className="pi-row"><Check size={13} strokeWidth={3} /> <span><strong>Cashing out is automatic.</strong> Tap the button and your earnings move to your Stripe account, which deposits to your bank on its own — nothing else to do.</span></div>
+                <div className="pi-row"><Clock size={13} /> <span><strong>When it lands:</strong> your <em>first</em> payout can take ~7–14 days while Stripe verifies you. After that, deposits usually arrive within about 2 business days.</span></div>
+                <div className="pi-row"><Bell size={13} /> <span>Exact timing is set by Stripe and your bank, so it can vary. You can track payout dates in your Stripe dashboard.</span></div>
+              </div>
+              <p className="auth-fine"><button className="linklike" onClick={connectPayouts}>Manage payout account</button></p>
             </>
           )}
         </div>
@@ -1720,6 +1840,24 @@ function App() {
   }
   function refreshJobs() { (async () => { await reloadJobs(); toast("Board refreshed.", "info"); })(); }
 
+  // Worker gives up / can't finish a claimed quest — back to the board, with a note.
+  async function releaseJob(id, opts) {
+    const o = opts || {};
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    const patch = {
+      status: "open", claimedBy: null, claimedByName: "",
+      scheduledTime: null, steps: [],
+      releaseReason: o.reason || "", releaseNote: (o.note || "").trim(),
+    };
+    setJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
+    const { error } = await dbUpdateJob(id, patch);
+    if (error) { toast("Couldn't release that quest — try again.", "error"); reloadJobs(); return; }
+    play("toggle");
+    toast("Released back to the board. Take care of yourself. 💛", "info");
+    setView("browse");
+  }
+
   function setHomeLocation(lat, lng) {
     updateUser({ homeLat: lat, homeLng: lng });
   }
@@ -1744,11 +1882,16 @@ function App() {
     /* eslint-disable-next-line */
   }, [phase]);
 
+  // Apply the user's chosen accent color (or default crimson) across the app.
+  useEffect(() => {
+    applyTheme(user && user.settings ? user.settings.themeColor : null);
+  }, [user && user.settings ? user.settings.themeColor : null]);
+
   const value = {
     user, jobs, view, setView, now, ui, setUi,
     signup, login, demoLogin, logout, postJob, deleteJob, claimJob, setSteps, completeJob,
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
-    setHomeLocation, refreshProfile,
+    setHomeLocation, refreshProfile, releaseJob,
   };
 
   return (
@@ -1795,6 +1938,7 @@ const CSS = `
   --pglow:rgba(230,23,58,.55);
   --accent:#FF4D6D; --accent-l:#2E0F16;
   --ember:#FF6B2C;
+  --bgtint1:rgba(230,23,58,.20); --bgtint2:rgba(255,77,109,.13); --seltint:rgba(230,23,58,.40);
   --gold:#FFC24B; --gold-l:#2A1E0A;
   --mint:#23E89B; --mint-l:#08251A;
   --cyan:#2BD6EE; --cyan-l:#06222A;
@@ -1807,10 +1951,10 @@ const CSS = `
   --mono:'Space Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-::selection{background:rgba(230,23,58,.40);color:#fff}
+::selection{background:var(--seltint);color:#fff}
 .app{font-family:var(--font);color:var(--ink);min-height:100vh;background:
-  radial-gradient(900px 520px at 84% -10%, rgba(230,23,58,.20), transparent 60%),
-  radial-gradient(820px 620px at -10% 110%, rgba(255,77,109,.13), transparent 55%),
+  radial-gradient(900px 520px at 84% -10%, var(--bgtint1), transparent 60%),
+  radial-gradient(820px 620px at -10% 110%, var(--bgtint2), transparent 55%),
   radial-gradient(1200px 900px at 50% 40%, transparent, rgba(5,2,3,.55) 92%),
   var(--bg);position:relative;overflow-x:hidden}
 .app::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;
@@ -1834,8 +1978,8 @@ em{font-style:normal;color:var(--primary)}
 /* ambient ember glows */
 .blobs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
 .blob{position:absolute;border-radius:50%;filter:blur(80px);opacity:.45}
-.b1{width:460px;height:460px;background:radial-gradient(circle,#E6173A 0%,transparent 68%);top:-150px;left:-90px;animation:float1 19s ease-in-out infinite}
-.b2{width:380px;height:380px;background:radial-gradient(circle,#FF4D6D 0%,transparent 68%);bottom:-140px;right:-70px;animation:float2 23s ease-in-out infinite}
+.b1{width:460px;height:460px;background:radial-gradient(circle,var(--primary) 0%,transparent 68%);top:-150px;left:-90px;animation:float1 19s ease-in-out infinite}
+.b2{width:380px;height:380px;background:radial-gradient(circle,var(--accent) 0%,transparent 68%);bottom:-140px;right:-70px;animation:float2 23s ease-in-out infinite}
 .b3{width:340px;height:340px;background:radial-gradient(circle,#7C0A1E 0%,transparent 70%);top:38%;right:16%;animation:float1 27s ease-in-out infinite}
 @keyframes float1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.08)}}
 @keyframes float2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-50px,30px) scale(1.05)}}
@@ -1868,7 +2012,7 @@ em{font-style:normal;color:var(--primary)}
 /* brand */
 .brand{font-family:var(--disp);font-weight:700;font-size:20px;letter-spacing:.01em;display:flex;align-items:center;gap:9px}
 .brand-lg{font-size:27px}
-.brand-mark{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#E6173A,#FF4D6D);display:grid;place-items:center;color:#fff;box-shadow:0 8px 22px -6px var(--pglow);animation:markpulse 2.8s ease-in-out infinite}
+.brand-mark{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--primary),var(--accent));display:grid;place-items:center;color:#fff;box-shadow:0 8px 22px -6px var(--pglow);animation:markpulse 2.8s ease-in-out infinite}
 @keyframes markpulse{0%,100%{box-shadow:0 8px 22px -6px var(--pglow)}50%{box-shadow:0 0 24px 2px var(--pglow),0 8px 22px -6px var(--pglow)}}
 .brand-lg .brand-mark{width:44px;height:44px;border-radius:13px}
 
@@ -1879,7 +2023,7 @@ em{font-style:normal;color:var(--primary)}
 .btn-lg{padding:14px 22px;font-size:15px;border-radius:14px}
 .btn-full{width:100%}
 .btn:active{transform:translateY(1px) scale(.985)}
-.btn-primary{background:linear-gradient(120deg,#E6173A,#FF3D5E);color:#fff;box-shadow:0 12px 30px -12px rgba(230,23,58,.9),0 0 0 1px rgba(255,120,140,.25) inset}
+.btn-primary{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 12px 30px -12px rgba(230,23,58,.9),0 0 0 1px rgba(255,120,140,.25) inset}
 .btn-primary:hover{filter:brightness(1.08);box-shadow:0 16px 38px -12px rgba(230,23,58,1),0 0 24px -6px var(--pglow)}
 .btn-primary::before{content:"";position:absolute;top:0;left:-60%;width:38%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-20deg)}
 .btn-primary:hover::before{animation:sheen .7s ease}
@@ -1927,7 +2071,7 @@ em{font-style:normal;color:var(--primary)}
 /* bars */
 .bar{width:100%;background:#241016;border-radius:999px;overflow:hidden}
 .bar-fill{height:100%;border-radius:999px;transition:width .5s cubic-bezier(.2,1,.3,1)}
-.bar-primary{background:linear-gradient(90deg,#B40E2C,#FF4D6D);box-shadow:0 0 12px -2px var(--pglow)}
+.bar-primary{background:linear-gradient(90deg,var(--primary-d),var(--accent));box-shadow:0 0 12px -2px var(--pglow)}
 .bar-mint{background:linear-gradient(90deg,#17b377,#23E89B);box-shadow:0 0 12px -2px rgba(35,232,155,.5)}
 
 /* status + tags */
@@ -1940,7 +2084,7 @@ em{font-style:normal;color:var(--primary)}
 .effort-light{background:var(--mint-l);color:var(--mint)}
 .effort-medium{background:var(--gold-l);color:var(--gold)}
 .effort-heavy{background:var(--accent-l);color:var(--accent)}
-.match-tag{font-size:10.5px;font-weight:700;color:#fff;background:linear-gradient(120deg,#E6173A,#FF6B2C);padding:4px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:.03em;box-shadow:0 0 14px -4px var(--pglow);font-family:var(--disp)}
+.match-tag{font-size:10.5px;font-weight:700;color:#fff;background:linear-gradient(120deg,var(--primary),var(--ember));padding:4px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:.03em;box-shadow:0 0 14px -4px var(--pglow);font-family:var(--disp)}
 .countdown{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:var(--ink2);font-family:var(--mono)}
 .cd-soon{color:var(--gold)}
 .cd-urgent{color:var(--accent);animation:pulse 1.2s ease-in-out infinite;text-shadow:0 0 10px rgba(255,77,109,.7)}
@@ -1951,7 +2095,7 @@ em{font-style:normal;color:var(--primary)}
 .auth{min-height:100vh;display:grid;grid-template-columns:1.05fr .95fr;position:relative;z-index:2}
 .auth-pitch{padding:56px clamp(32px,5vw,72px);display:flex;flex-direction:column;justify-content:center;gap:22px}
 .hero-h{font-family:var(--disp);font-size:clamp(38px,5.2vw,62px);line-height:1.02;font-weight:700;letter-spacing:-.01em;text-shadow:0 2px 30px rgba(230,23,58,.25)}
-.hero-h em{background:linear-gradient(100deg,#FF4D6D,#E6173A 55%,#FF6B2C);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 16px rgba(230,23,58,.45))}
+.hero-h em{background:linear-gradient(100deg,var(--accent),var(--primary) 55%,var(--ember));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 16px rgba(230,23,58,.45))}
 .hero-p{font-size:17px;line-height:1.6;color:var(--ink2);max-width:480px}
 .hero-p strong{color:#fff;font-weight:700}
 .frows{display:flex;flex-direction:column;gap:14px;margin-top:6px}
@@ -1965,7 +2109,7 @@ em{font-style:normal;color:var(--primary)}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:5px;background:#1A0C10;padding:5px;border-radius:13px;border:1px solid var(--line)}
 .seg button{padding:11px;border-radius:10px;font-weight:700;font-size:13.5px;color:var(--ink2);display:flex;align-items:center;justify-content:center;gap:7px;transition:.18s;font-family:var(--disp)}
-.seg button.on{background:linear-gradient(120deg,#E6173A,#FF3D5E);color:#fff;box-shadow:0 0 20px -6px var(--pglow)}
+.seg button.on{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 0 20px -6px var(--pglow)}
 .seg-mode button.on{background:var(--card2);color:#fff;box-shadow:none;border:1px solid var(--line2)}
 .auth-fields{display:flex;flex-direction:column;gap:2px}
 .auth-err{display:flex;align-items:center;gap:7px;background:var(--accent-l);color:#ff8ea0;padding:10px 13px;border-radius:11px;font-weight:600;font-size:13.5px;margin:6px 0 12px;border:1px solid #7a1228}
@@ -2010,6 +2154,36 @@ em{font-style:normal;color:var(--primary)}
 .cashout-sub{font-size:12.5px;color:var(--muted);margin-top:5px;font-weight:600}
 .linklike{background:none;border:none;padding:0;color:var(--primary);font:inherit;font-weight:700;cursor:pointer;text-decoration:underline}
 
+/* release / can't-finish */
+.note-strip{display:flex;gap:8px;align-items:flex-start;background:var(--gold-l);border:1px solid #3a2a0e;color:var(--gold);border-radius:11px;padding:9px 12px;font-size:12.5px;font-weight:600;line-height:1.45;margin-top:2px}
+.note-strip svg{flex:none;margin-top:1px}
+.note-strip strong{font-weight:800}
+.giveup{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+.giveup-link{background:none;border:none;color:var(--muted);font:inherit;font-weight:600;font-size:13px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.giveup-link:hover{color:var(--ink2)}
+.giveup-box{display:flex;flex-direction:column;gap:8px;animation:rise .25s}
+.giveup-h{display:flex;align-items:flex-start;gap:7px;font-size:13px;color:var(--ink2);font-weight:600;line-height:1.45;margin-bottom:2px}
+.giveup-h svg{flex:none;margin-top:1px;color:var(--primary)}
+.giveup-note{resize:vertical;min-height:62px;font-family:var(--font);line-height:1.45}
+.giveup-actions{display:flex;gap:8px;justify-content:flex-end}
+
+/* payout info */
+.payout-info{display:flex;flex-direction:column;gap:9px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-top:10px}
+.pi-row{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:var(--ink2);line-height:1.5}
+.pi-row svg{flex:none;margin-top:2px;color:var(--mint)}
+.pi-row strong{color:var(--ink);font-weight:700}
+.pi-row em{color:var(--primary);font-style:normal;font-weight:700}
+
+/* appearance swatches */
+.swatches{display:flex;flex-wrap:wrap;gap:10px;margin:4px 0 6px}
+.swatch{width:38px;height:38px;border-radius:50%;border:2px solid var(--line2);background:var(--card2);display:grid;place-items:center;cursor:pointer;transition:transform .12s ease,border-color .15s ease;position:relative}
+.swatch:hover{transform:scale(1.08)}
+.swatch.on{border-color:var(--ink);box-shadow:0 0 0 3px var(--card),0 0 16px -4px var(--pglow)}
+.sw-dot{width:24px;height:24px;border-radius:50%;box-shadow:inset 0 0 8px rgba(0,0,0,.35)}
+.sw-custom{overflow:hidden}
+.sw-custom .sw-plus{color:var(--ink2);display:grid;place-items:center;pointer-events:none}
+.sw-custom input[type=color]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0}
+
 /* ===== NAV ===== */
 .nav{position:sticky;top:0;z-index:40;background:rgba(12,6,8,.78);backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
 .nav-inner{max-width:1160px;margin:0 auto;padding:12px clamp(16px,3vw,28px);display:flex;align-items:center;gap:16px}
@@ -2017,9 +2191,9 @@ em{font-style:normal;color:var(--primary)}
 .nav-tabs::-webkit-scrollbar{height:0}
 .nav-tab{display:flex;align-items:center;gap:7px;padding:9px 15px;border-radius:10px;font-weight:700;font-size:13px;color:var(--ink2);transition:.16s;white-space:nowrap;font-family:var(--disp)}
 .nav-tab:hover{color:#fff}
-.nav-tab.on{background:linear-gradient(120deg,#E6173A,#FF3D5E);color:#fff;box-shadow:0 0 18px -6px var(--pglow)}
+.nav-tab.on{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 0 18px -6px var(--pglow)}
 .nav-right{margin-left:auto;display:flex;align-items:center;gap:9px}
-.nav-ava{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#E6173A,#FF4D6D);color:#fff;display:grid;place-items:center;font-weight:700;font-size:15px;text-transform:uppercase;box-shadow:0 0 18px -6px var(--pglow);font-family:var(--disp)}
+.nav-ava{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;display:grid;place-items:center;font-weight:700;font-size:15px;text-transform:uppercase;box-shadow:0 0 18px -6px var(--pglow);font-family:var(--disp)}
 
 /* ===== PAGE ===== */
 .main{max-width:1160px;margin:0 auto;padding:clamp(20px,3vw,38px) clamp(16px,3vw,28px) 80px;position:relative;z-index:2}
@@ -2035,7 +2209,7 @@ em{font-style:normal;color:var(--primary)}
 .stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;display:flex;align-items:center;gap:13px;box-shadow:var(--sh-sm)}
 .stat-ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;color:#fff}
-.stat-primary .stat-ic{background:linear-gradient(135deg,#E6173A,#FF4D6D);box-shadow:0 0 18px -6px var(--pglow)}
+.stat-primary .stat-ic{background:linear-gradient(135deg,var(--primary),var(--accent));box-shadow:0 0 18px -6px var(--pglow)}
 .stat-cyan .stat-ic{background:linear-gradient(135deg,#1796b3,#2BD6EE);box-shadow:0 0 18px -6px rgba(43,214,238,.5)}
 .stat-mint .stat-ic{background:linear-gradient(135deg,#17b377,#23E89B);box-shadow:0 0 18px -6px rgba(35,232,155,.5)}
 .stat-val{font-family:var(--mono);font-size:23px;font-weight:700;line-height:1;color:#fff}
@@ -2111,7 +2285,7 @@ em{font-style:normal;color:var(--primary)}
 .reward{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;text-align:center;position:relative;opacity:.5;filter:grayscale(.6);transition:.2s}
 .reward-on{opacity:1;filter:none;border-color:var(--line2);box-shadow:var(--sh-sm),0 0 22px -10px var(--pglow)}
 .reward-ic{width:48px;height:48px;border-radius:14px;background:#1A0C10;display:grid;place-items:center;margin:0 auto 10px;color:var(--muted)}
-.reward-on .reward-ic{background:linear-gradient(135deg,#E6173A,#FF6B2C);color:#fff;box-shadow:0 0 20px -6px var(--pglow)}
+.reward-on .reward-ic{background:linear-gradient(135deg,var(--primary),var(--ember));color:#fff;box-shadow:0 0 20px -6px var(--pglow)}
 .reward-t{font-weight:700;font-size:14.5px;font-family:var(--disp);color:#fff}
 .reward-b{font-size:12px;color:var(--ink2);margin-top:3px}
 .reward-badge{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:var(--mint);color:#06231a;display:grid;place-items:center;box-shadow:0 0 14px -4px rgba(35,232,155,.7)}
