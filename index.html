@@ -59,8 +59,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -147,6 +147,13 @@ function rowToJob(r) {
     lng: r.longitude != null ? Number(r.longitude) : null,
     releaseNote: r.release_note || "",
     releaseReason: r.release_reason || "",
+  };
+}
+function rowToMsg(r) {
+  return {
+    id: r.id, jobId: r.job_id,
+    senderId: r.sender_id, senderName: r.sender_name || "",
+    body: r.body || "", createdAt: Number(r.created_at) || 0,
   };
 }
 function profilePatchToRow(p) {
@@ -326,24 +333,31 @@ function hexToHue(hex) {
   return { hue, sat: mx === 0 ? 0 : d / mx };
 }
 // Pass a hex to theme the app; pass null/empty to restore the default crimson.
+function hslToRgb(h, s, l) {
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return Math.round(255 * f(0)) + "," + Math.round(255 * f(8)) + "," + Math.round(255 * f(4));
+}
 function applyTheme(hex) {
   const root = document.documentElement.style;
-  const keys = ["--bg","--bg2","--void","--card","--card2","--line","--line2",
-    "--primary","--primary-d","--primary-l","--accent","--accent-l","--ember",
-    "--pglow","--bgtint1","--bgtint2","--seltint","--ink","--ink2","--muted"];
+  const keys = ["--p-rgb","--a-rgb","--primary-d","--primary-l","--accent-l","--ember",
+    "--bg","--bg2","--void","--card","--card2","--line","--line2","--ink","--ink2","--muted"];
   if (!hex) { keys.forEach(k => root.removeProperty(k)); return; }
   const { hue, sat } = hexToHue(hex);
   const H = sat < 0.08 ? 222 : Math.round(hue);     // gray/white/black input → tasteful blue
   const H2 = (H + 14) % 360;
-  const c = (s, l, a) => a == null ? `hsl(${H}, ${s}%, ${l}%)` : `hsla(${H}, ${s}%, ${l}%, ${a})`;
+  const hsl = (s, l) => `hsl(${H}, ${s}%, ${l}%)`;
+  // primary + accent flow through RGB triplets so every glow/tint follows along;
+  // the rest are fixed shades of the same hue, kept dark + black-based.
   const set = {
-    "--primary": c(80, 52), "--primary-d": c(82, 40), "--primary-l": c(48, 10),
-    "--accent": c(100, 66), "--accent-l": c(45, 12), "--ember": `hsl(${H2}, 95%, 60%)`,
-    "--pglow": c(92, 55, .55),
-    "--bgtint1": c(85, 46, .20), "--bgtint2": `hsla(${H2}, 90%, 60%, .13)`, "--seltint": c(85, 46, .42),
-    "--bg": c(32, 4.5), "--bg2": c(36, 7.5), "--void": c(30, 2.5),
-    "--card": c(30, 6), "--card2": c(30, 9.5), "--line": c(34, 14), "--line2": c(38, 19),
-    "--ink": c(30, 95), "--ink2": c(26, 72), "--muted": c(22, 47),
+    "--p-rgb": hslToRgb(H, 80, 52), "--a-rgb": hslToRgb(H, 100, 66),
+    "--primary-d": hsl(82, 40), "--primary-l": hsl(48, 10),
+    "--accent-l": hsl(45, 12), "--ember": `hsl(${H2}, 95%, 60%)`,
+    "--bg": hsl(32, 4.5), "--bg2": hsl(36, 7.5), "--void": hsl(30, 2.5),
+    "--card": hsl(30, 6), "--card2": hsl(30, 9.5), "--line": hsl(34, 14), "--line2": hsl(38, 19),
+    "--ink": hsl(30, 95), "--ink2": hsl(26, 72), "--muted": hsl(22, 47),
   };
   Object.keys(set).forEach(k => root.setProperty(k, set[k]));
 }
@@ -566,7 +580,9 @@ function ConfettiLayer({ trigger }) {
   const [pieces, setPieces] = useState([]);
   useEffect(() => {
     if (!trigger) return;
-    const colors = ["#E6173A", "#FF4D6D", "#FFC24B", "#23E89B", "#FF6B2C"];
+    const cs = getComputedStyle(document.documentElement);
+    const v = (name, fallback) => { const x = cs.getPropertyValue(name).trim(); return x || fallback; };
+    const colors = [v("--primary", "#E6173A"), v("--accent", "#FF4D6D"), "#FFC24B", "#23E89B", v("--ember", "#FF6B2C")];
     const batch = Array.from({ length: 90 }, (_, i) => ({
       id: trigger + "-" + i + "-" + Math.random(),
       left: Math.random() * 100, bg: colors[i % colors.length],
@@ -918,7 +934,7 @@ function PostQuestForm() {
       <Btn full size="lg" icon={Rocket} onClick={submit} disabled={busy || locBusy} sound="claim">
         {busy ? "Starting checkout…" : PAYMENTS_ENABLED ? `Pay ${money(totalCharge)} & post quest` : "Post quest to the board"}
       </Btn>
-      {PAYMENTS_ENABLED && <p className="pay-note">Secure checkout via Stripe. Your quest goes live the moment payment succeeds.</p>}
+      {PAYMENTS_ENABLED && <p className="pay-note">Secure Stripe checkout — you're charged when you post, and the quest goes live the moment payment clears. Your quester earns this full payout for completing it, and cashes out to their own bank through Stripe.</p>}
     </div>
   );
 }
@@ -948,6 +964,7 @@ function ClientJobCard({ job }) {
           <CheckCircle2 size={14} /> Completed by <strong>{job.claimedByName}</strong>
         </div>
       )}
+      {(job.status === "claimed" || job.status === "completed") && <JobChat job={job} />}
       {job.status === "open" && job.releaseNote && (
         <div className="note-strip">
           <RefreshCw size={13} />
@@ -1140,6 +1157,8 @@ function TaskCard({ job }) {
         <Btn variant="success" icon={CheckCircle2} onClick={() => completeJob(job.id)} sound="success">Mark complete</Btn>
       </div>
 
+      <JobChat job={job} />
+
       <div className="giveup">
         {!giveUp ? (
           <button className="giveup-link" onClick={() => setGiveUp(true)}>Can't finish this quest?</button>
@@ -1170,6 +1189,85 @@ function RewardCard({ icon: Icon, title, body, earned }) {
       <div className="reward-t">{title}</div>
       <div className="reward-b">{body}</div>
       {earned && <span className="reward-badge"><Check size={12} strokeWidth={3} /></span>}
+    </div>
+  );
+}
+function PayoutHint() {
+  const { user, setView } = useApp();
+  const setUp = !!user.payoutsEnabled;
+  return (
+    <div className="pay-hint">
+      <span className="pay-hint-ic"><DollarSign size={14} strokeWidth={2.6} /></span>
+      <span>
+        You keep the <strong>full payout</strong> on every quest. Cash out anytime from{" "}
+        <button className="linklike" onClick={() => setView("settings")}>Settings</button>{setUp ? "" : " (connect a payout account first)"} — money then lands in your bank automatically. Your first payout takes about 7–14 days while Stripe verifies you, then deposits usually arrive within ~2 business days.
+      </span>
+    </div>
+  );
+}
+function JobChat({ job }) {
+  const { user, toast } = useApp();
+  const [open, setOpen] = useState(false);
+  const [msgs, setMsgs] = useState([]);
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const endRef = useRef(null);
+  const other = user.type === "client" ? (job.claimedByName || "your quester") : (job.postedByName || "the client");
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setLoading(true);
+    (async () => {
+      const { data } = await supabase.from("messages").select("*").eq("job_id", job.id).order("created_at", { ascending: true });
+      if (active) { setMsgs((data || []).map(rowToMsg)); setLoading(false); }
+    })();
+    const ch = supabase.channel("chat-" + job.id)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "job_id=eq." + job.id },
+        payload => { const m = rowToMsg(payload.new); setMsgs(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]); })
+      .subscribe();
+    return () => { active = false; try { supabase.removeChannel(ch); } catch (e) {} };
+  }, [open, job.id]);
+
+  useEffect(() => { if (open && endRef.current) endRef.current.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs, open]);
+
+  async function send() {
+    const body = text.trim();
+    if (!body) return;
+    setText("");
+    const row = { job_id: job.id, sender_id: user.id, sender_name: user.name, body, created_at: Date.now() };
+    const { data, error } = await supabase.from("messages").insert(row).select().single();
+    if (error) { toast("Message didn't send — try again.", "error"); setText(body); return; }
+    if (data) { const m = rowToMsg(data); setMsgs(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]); }
+    play("click");
+  }
+
+  return (
+    <div className="chat">
+      <button className={`chat-toggle ${open ? "open" : ""}`} onClick={() => { setOpen(o => !o); play("toggle"); }}>
+        <MessageCircle size={15} strokeWidth={2.4} /> Message {other}
+        <ChevronRight size={15} className="chat-chev" />
+      </button>
+      {open && (
+        <div className="chat-body">
+          <div className="chat-msgs">
+            {loading && <div className="chat-empty">Loading…</div>}
+            {!loading && msgs.length === 0 && <div className="chat-empty">No messages yet — say hi 👋</div>}
+            {msgs.map(m => (
+              <div key={m.id} className={`bubble ${m.senderId === user.id ? "mine" : ""}`}>
+                {m.senderId !== user.id && <span className="bubble-name">{m.senderName}</span>}
+                <span className="bubble-text">{m.body}</span>
+              </div>
+            ))}
+            <div ref={endRef} />
+          </div>
+          <div className="chat-input">
+            <input value={text} onChange={e => setText(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && send()} placeholder={`Message ${other}…`} maxLength={1000} />
+            <button className="chat-send" onClick={send} aria-label="Send message"><Send size={16} strokeWidth={2.4} /></button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1254,6 +1352,7 @@ function WorkerHome() {
           </div>
         </div>
         <div className="rewards-grid">{rewards.map((r, i) => <RewardCard key={i} {...r} />)}</div>
+        <PayoutHint />
       </div>
     );
   }
@@ -1262,6 +1361,7 @@ function WorkerHome() {
     return (
       <div className="page">
         <header className="page-head"><h1>Your tasks</h1><p>{active.length ? "Break them down, sprint through, check them off." : "Nothing claimed yet."}</p></header>
+        <PayoutHint />
         {active.length === 0 && finished.length === 0
           ? <Empty icon={Target} title="No quests claimed" body="Browse the board and grab one that fits your energy today." />
           : <>
@@ -1296,6 +1396,8 @@ function WorkerHome() {
         <div className="ls-bar"><Bar value={pct} tone="primary" /></div>
         <div className="ls-r"><Flame size={16} className="flame" />{user.streak || 0}</div>
       </div>
+
+      <PayoutHint />
 
       <div className="energy-row">
         <span className="energy-label"><Gauge size={15} /> Energy today</span>
@@ -1934,11 +2036,12 @@ const CSS = `
 :root{
   --bg:#0A0507; --bg2:#160A0E; --void:#050203; --ink:#F7E9EC; --ink2:#C79AA3; --muted:#8C5C66;
   --card:#130A0D; --card2:#1B0E12; --line:#2C141A; --line2:#3D1A23;
-  --primary:#E6173A; --primary-d:#B40E2C; --primary-l:#250C12;
-  --pglow:rgba(230,23,58,.55);
-  --accent:#FF4D6D; --accent-l:#2E0F16;
+  --p-rgb:230,23,58; --a-rgb:255,77,109;
+  --primary:rgb(var(--p-rgb)); --primary-d:#B40E2C; --primary-l:#250C12;
+  --accent:rgb(var(--a-rgb)); --accent-l:#2E0F16;
   --ember:#FF6B2C;
-  --bgtint1:rgba(230,23,58,.20); --bgtint2:rgba(255,77,109,.13); --seltint:rgba(230,23,58,.40);
+  --pglow:rgba(var(--p-rgb),.55);
+  --bgtint1:rgba(var(--p-rgb),.20); --bgtint2:rgba(var(--a-rgb),.13); --seltint:rgba(var(--p-rgb),.40);
   --gold:#FFC24B; --gold-l:#2A1E0A;
   --mint:#23E89B; --mint-l:#08251A;
   --cyan:#2BD6EE; --cyan-l:#06222A;
@@ -1991,7 +2094,7 @@ em{font-style:normal;color:var(--primary)}
 
 /* confetti */
 .confetti-layer{position:fixed;inset:0;z-index:80;pointer-events:none;overflow:hidden}
-.confetti-piece{position:absolute;top:-20px;border-radius:2px;animation:fall linear forwards;will-change:transform;box-shadow:0 0 8px rgba(230,23,58,.4)}
+.confetti-piece{position:absolute;top:-20px;border-radius:2px;animation:fall linear forwards;will-change:transform;box-shadow:0 0 8px rgba(var(--p-rgb),.4)}
 @keyframes fall{0%{transform:translate(0,0) rotate(0);opacity:1}100%{transform:translate(var(--drift),104vh) rotate(var(--rot));opacity:.9}}
 
 /* toasts */
@@ -2023,8 +2126,8 @@ em{font-style:normal;color:var(--primary)}
 .btn-lg{padding:14px 22px;font-size:15px;border-radius:14px}
 .btn-full{width:100%}
 .btn:active{transform:translateY(1px) scale(.985)}
-.btn-primary{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 12px 30px -12px rgba(230,23,58,.9),0 0 0 1px rgba(255,120,140,.25) inset}
-.btn-primary:hover{filter:brightness(1.08);box-shadow:0 16px 38px -12px rgba(230,23,58,1),0 0 24px -6px var(--pglow)}
+.btn-primary{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 12px 30px -12px rgba(var(--p-rgb),.9),0 0 0 1px rgba(255,120,140,.25) inset}
+.btn-primary:hover{filter:brightness(1.08);box-shadow:0 16px 38px -12px rgba(var(--p-rgb),1),0 0 24px -6px var(--pglow)}
 .btn-primary::before{content:"";position:absolute;top:0;left:-60%;width:38%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-20deg)}
 .btn-primary:hover::before{animation:sheen .7s ease}
 @keyframes sheen{from{left:-60%}to{left:140%}}
@@ -2050,13 +2153,13 @@ em{font-style:normal;color:var(--primary)}
 .chip:hover{border-color:var(--primary);color:#fff}
 .chip-on{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 0 18px -6px var(--pglow)}
 .chip-mint.chip-on{background:var(--mint);border-color:var(--mint);color:#06231a;box-shadow:0 0 18px -6px rgba(35,232,155,.6)}
-.chip-coral.chip-on{background:var(--accent);border-color:var(--accent);color:#2a0a10;box-shadow:0 0 18px -6px rgba(255,77,109,.6)}
+.chip-coral.chip-on{background:var(--accent);border-color:var(--accent);color:#2a0a10;box-shadow:0 0 18px -6px rgba(var(--a-rgb),.6)}
 
 /* fields */
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
 .field-label{font-weight:700;font-size:12.5px;color:var(--ink2);letter-spacing:.02em;text-transform:uppercase;font-family:var(--disp)}
 .field-input{width:100%;padding:12px 14px;border-radius:12px;border:1.5px solid var(--line2);background:#1A0C10;font-size:14.5px;color:var(--ink);transition:.16s;font-weight:500}
-.field-input:focus{outline:none;border-color:var(--primary);background:#200E13;box-shadow:0 0 0 4px rgba(230,23,58,.18)}
+.field-input:focus{outline:none;border-color:var(--primary);background:#200E13;box-shadow:0 0 0 4px rgba(var(--p-rgb),.18)}
 .field-area{resize:vertical;line-height:1.5}
 .field-hint{font-size:12px;color:var(--muted)}
 .pw-wrap{position:relative}
@@ -2087,15 +2190,15 @@ em{font-style:normal;color:var(--primary)}
 .match-tag{font-size:10.5px;font-weight:700;color:#fff;background:linear-gradient(120deg,var(--primary),var(--ember));padding:4px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:.03em;box-shadow:0 0 14px -4px var(--pglow);font-family:var(--disp)}
 .countdown{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:var(--ink2);font-family:var(--mono)}
 .cd-soon{color:var(--gold)}
-.cd-urgent{color:var(--accent);animation:pulse 1.2s ease-in-out infinite;text-shadow:0 0 10px rgba(255,77,109,.7)}
+.cd-urgent{color:var(--accent);animation:pulse 1.2s ease-in-out infinite;text-shadow:0 0 10px rgba(var(--a-rgb),.7)}
 .cd-over{color:var(--accent)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 
 /* ===== AUTH ===== */
 .auth{min-height:100vh;display:grid;grid-template-columns:1.05fr .95fr;position:relative;z-index:2}
 .auth-pitch{padding:56px clamp(32px,5vw,72px);display:flex;flex-direction:column;justify-content:center;gap:22px}
-.hero-h{font-family:var(--disp);font-size:clamp(38px,5.2vw,62px);line-height:1.02;font-weight:700;letter-spacing:-.01em;text-shadow:0 2px 30px rgba(230,23,58,.25)}
-.hero-h em{background:linear-gradient(100deg,var(--accent),var(--primary) 55%,var(--ember));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 16px rgba(230,23,58,.45))}
+.hero-h{font-family:var(--disp);font-size:clamp(38px,5.2vw,62px);line-height:1.02;font-weight:700;letter-spacing:-.01em;text-shadow:0 2px 30px rgba(var(--p-rgb),.25)}
+.hero-h em{background:linear-gradient(100deg,var(--accent),var(--primary) 55%,var(--ember));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 16px rgba(var(--p-rgb),.45))}
 .hero-p{font-size:17px;line-height:1.6;color:var(--ink2);max-width:480px}
 .hero-p strong{color:#fff;font-weight:700}
 .frows{display:flex;flex-direction:column;gap:14px;margin-top:6px}
@@ -2104,7 +2207,7 @@ em{font-style:normal;color:var(--primary)}
 .frow-t{font-weight:700;font-size:15px;letter-spacing:.005em;font-family:var(--disp)}
 .frow-b{font-size:13.5px;color:var(--ink2);line-height:1.45}
 
-.auth-panel{background:linear-gradient(180deg,#150A0E,#0E0709);border-left:1px solid var(--line);padding:48px clamp(28px,4vw,56px);display:flex;flex-direction:column;justify-content:center;gap:18px;box-shadow:-40px 0 80px -50px rgba(230,23,58,.4)}
+.auth-panel{background:linear-gradient(180deg,#150A0E,#0E0709);border-left:1px solid var(--line);padding:48px clamp(28px,4vw,56px);display:flex;flex-direction:column;justify-content:center;gap:18px;box-shadow:-40px 0 80px -50px rgba(var(--p-rgb),.4)}
 .shake{animation:shake .42s}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:5px;background:#1A0C10;padding:5px;border-radius:13px;border:1px solid var(--line)}
@@ -2135,6 +2238,10 @@ em{font-style:normal;color:var(--primary)}
 .loc-btn:active{transform:translateY(1px)}
 .loc-btn:disabled{opacity:.5;cursor:default}
 .pay-note{font-size:12px;color:var(--muted);text-align:center;margin:8px 0 0}
+.pay-hint{display:flex;gap:10px;align-items:flex-start;background:var(--mint-l);border:1px solid #103f2e;border-radius:13px;padding:11px 14px;font-size:12.5px;line-height:1.5;color:var(--ink2);font-weight:500}
+.pay-hint-ic{flex:none;width:24px;height:24px;border-radius:8px;background:var(--mint);color:#06231a;display:grid;place-items:center;margin-top:1px}
+.pay-hint strong{color:var(--mint);font-weight:800}
+.pay-hint .linklike{color:var(--mint)}
 .dist-i{color:var(--mint)!important;font-weight:700}
 .loc-bar{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;margin-bottom:12px}
 .loc-bar-row{display:flex;align-items:center;gap:8px;color:var(--muted)}
@@ -2183,6 +2290,28 @@ em{font-style:normal;color:var(--primary)}
 .sw-custom{overflow:hidden}
 .sw-custom .sw-plus{color:var(--ink2);display:grid;place-items:center;pointer-events:none}
 .sw-custom input[type=color]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0}
+
+/* per-project chat */
+.chat{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+.chat-toggle{display:flex;align-items:center;gap:8px;width:100%;background:var(--card2);border:1px solid var(--line2);border-radius:11px;padding:10px 13px;font-family:var(--disp);font-weight:700;font-size:13.5px;color:var(--ink2);cursor:pointer;transition:.15s}
+.chat-toggle:hover{border-color:var(--primary);color:var(--ink)}
+.chat-toggle.open{color:var(--primary)}
+.chat-toggle>svg:first-child{color:var(--primary);flex:none}
+.chat-chev{margin-left:auto;transition:transform .2s;flex:none}
+.chat-toggle.open .chat-chev{transform:rotate(90deg)}
+.chat-body{margin-top:8px;border:1px solid var(--line2);border-radius:13px;background:var(--void);overflow:hidden;animation:rise .25s}
+.chat-msgs{display:flex;flex-direction:column;gap:7px;padding:12px;max-height:300px;overflow-y:auto}
+.chat-empty{text-align:center;color:var(--muted);font-size:13px;padding:18px 0;font-weight:500}
+.bubble{max-width:82%;align-self:flex-start;display:flex;flex-direction:column;gap:2px;background:var(--card2);border:1px solid var(--line);padding:8px 12px;border-radius:14px;border-bottom-left-radius:4px}
+.bubble.mine{align-self:flex-end;background:var(--primary-l);border-color:var(--line2);border-bottom-left-radius:14px;border-bottom-right-radius:4px}
+.bubble-name{font-size:11px;font-weight:800;color:var(--primary);font-family:var(--disp)}
+.bubble-text{font-size:14px;line-height:1.4;color:var(--ink);word-break:break-word;white-space:pre-wrap}
+.chat-input{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--card)}
+.chat-input input{flex:1;background:var(--void);border:1.5px solid var(--line2);border-radius:11px;padding:10px 13px;font-size:14px;color:var(--ink);outline:none}
+.chat-input input:focus{border-color:var(--primary)}
+.chat-send{flex:none;width:42px;border-radius:11px;background:var(--primary);color:#fff;display:grid;place-items:center;cursor:pointer;transition:.15s}
+.chat-send:hover{filter:brightness(1.1)}
+.chat-send:active{transform:translateY(1px)}
 
 /* ===== NAV ===== */
 .nav{position:sticky;top:0;z-index:40;background:rgba(12,6,8,.78);backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
@@ -2299,7 +2428,7 @@ em{font-style:normal;color:var(--primary)}
 .energy-label{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13.5px;color:var(--ink2)}
 .search-row{display:flex;gap:10px}
 .search{flex:1;display:flex;align-items:center;gap:9px;background:#1A0C10;border:1.5px solid var(--line2);border-radius:13px;padding:0 14px;transition:.16s}
-.search:focus-within{border-color:var(--primary);box-shadow:0 0 0 4px rgba(230,23,58,.16)}
+.search:focus-within{border-color:var(--primary);box-shadow:0 0 0 4px rgba(var(--p-rgb),.16)}
 .search input{flex:1;border:none;background:none;padding:12px 0;font-size:14.5px;font-weight:500}
 .search input:focus{outline:none}
 .search svg{color:var(--muted)}
