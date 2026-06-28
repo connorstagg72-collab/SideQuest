@@ -1735,14 +1735,67 @@ function SettingsScreen() {
 /* ============================================================
    NAV
    ============================================================ */
+function loadIdSet(key) { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); } }
+function saveIdSet(key, set) { try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) {} }
 function ProfileMenu() {
   const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen } = useApp();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const isClient = user.type === "client";
+  const seenKey = "sq_nseen_" + user.id;
+  const dismKey = "sq_ndism_" + user.id;
+  const [seen, setSeen] = useState(() => loadIdSet(seenKey));
+  const [dismissed, setDismissed] = useState(() => loadIdSet(dismKey));
+
+  const mine = jobs.filter(j => (isClient ? j.postedBy : j.claimedBy) === user.id);
+  const all = [];
+  if (isClient) {
+    mine.filter(j => j.status === "submitted").forEach(j =>
+      all.push({ id: "rev-" + j.id, icon: Eye, tone: "gold", text: `Review “${j.title}” — work submitted`, to: "jobs" }));
+    mine.filter(j => j.status === "open" && j.releaseNote).forEach(j =>
+      all.push({ id: "rel-" + j.id, icon: RefreshCw, tone: "muted", text: `“${j.title}” came back unfinished`, to: "jobs" }));
+  } else {
+    mine.filter(j => j.status === "claimed" && j.reviewNote).forEach(j =>
+      all.push({ id: "chg-" + j.id, icon: RefreshCw, tone: "cyan", text: `Changes requested on “${j.title}”`, to: "tasks" }));
+    const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
+    if (available > 0) all.push({
+      id: "pay", icon: DollarSign, tone: "mint", to: "settings",
+      text: user.payoutsEnabled ? `${money(available)} ready to cash out` : `${money(available)} earned — set up payouts`,
+    });
+  }
+  msgNotifs.forEach(m => {
+    const job = jobs.find(j => j.id === m.jobId);
+    all.push({
+      id: "msg-" + m.jobId, icon: MessageCircle, tone: "primary", to: isClient ? "jobs" : "tasks",
+      text: `${m.count} new message${m.count > 1 ? "s" : ""} from ${m.name || "someone"}${job ? " · " + job.title : ""}`,
+    });
+  });
+  const visible = all.filter(n => !dismissed.has(n.id));
+  const badge = visible.filter(n => !seen.has(n.id)).length;
+
+  function markSeen() {
+    const ids = new Set(visible.map(n => n.id));
+    setSeen(ids); saveIdSet(seenKey, ids);
+    // forget dismissals for notifications that no longer exist, so resolved
+    // items can notify again if they ever recur.
+    const cur = new Set(all.map(n => n.id));
+    const keep = new Set(); let changed = false;
+    dismissed.forEach(id => { if (cur.has(id)) keep.add(id); else changed = true; });
+    if (changed) { setDismissed(keep); saveIdSet(dismKey, keep); }
+  }
+  function dismiss(id) {
+    play("toggle");
+    const next = new Set(dismissed); next.add(id);
+    setDismissed(next); saveIdSet(dismKey, next);
+  }
+  function clearAll() {
+    play("toggle");
+    const next = new Set(dismissed); visible.forEach(n => next.add(n.id));
+    setDismissed(next); saveIdSet(dismKey, next);
+  }
 
   function close() { setOpen(false); markMsgsSeen(); }
-  function toggle() { if (open) close(); else { setOpen(true); play("pop"); refreshMsgNotifs(); } }
+  function toggle() { if (open) close(); else { setOpen(true); play("pop"); refreshMsgNotifs(); markSeen(); } }
   function go(to) { setView(to); close(); }
 
   useEffect(() => {
@@ -1755,31 +1808,6 @@ function ProfileMenu() {
     /* eslint-disable-next-line */
   }, [open]);
 
-  const mine = jobs.filter(j => (isClient ? j.postedBy : j.claimedBy) === user.id);
-  const notifs = [];
-  if (isClient) {
-    mine.filter(j => j.status === "submitted").forEach(j =>
-      notifs.push({ id: "rev-" + j.id, icon: Eye, tone: "gold", text: `Review “${j.title}” — work submitted`, to: "jobs" }));
-    mine.filter(j => j.status === "open" && j.releaseNote).forEach(j =>
-      notifs.push({ id: "rel-" + j.id, icon: RefreshCw, tone: "muted", text: `“${j.title}” came back unfinished`, to: "jobs" }));
-  } else {
-    mine.filter(j => j.status === "claimed" && j.reviewNote).forEach(j =>
-      notifs.push({ id: "chg-" + j.id, icon: RefreshCw, tone: "cyan", text: `Changes requested on “${j.title}”`, to: "tasks" }));
-    const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
-    if (available > 0) notifs.push({
-      id: "pay", icon: DollarSign, tone: "mint", to: "settings",
-      text: user.payoutsEnabled ? `${money(available)} ready to cash out` : `${money(available)} earned — set up payouts`,
-    });
-  }
-  msgNotifs.forEach(m => {
-    const job = jobs.find(j => j.id === m.jobId);
-    notifs.push({
-      id: "msg-" + m.jobId, icon: MessageCircle, tone: "primary", to: isClient ? "jobs" : "tasks",
-      text: `${m.count} new message${m.count > 1 ? "s" : ""} from ${m.name || "someone"}${job ? " · " + job.title : ""}`,
-    });
-  });
-  const count = notifs.length;
-
   const shortcuts = isClient
     ? [["Post a quest", Plus, "post"], ["My quests", Briefcase, "jobs"], ["Settings", Settings, "settings"]]
     : [["Browse quests", Search, "browse"], ["My tasks", ListChecks, "tasks"], ["Rewards", Trophy, "rewards"], ["Earnings & payouts", DollarSign, "settings"], ["Settings", Settings, "settings"]];
@@ -1788,7 +1816,7 @@ function ProfileMenu() {
     <div className="profile-menu" ref={ref}>
       <button className={`nav-user ${open ? "on" : ""}`} onClick={toggle} aria-label="Profile & notifications">
         <span className="nav-ava">{(user.name || "?")[0]}</span>
-        {count > 0 && <span className="notif-badge">{count > 9 ? "9+" : count}</span>}
+        {badge > 0 && <span className="notif-badge">{badge > 9 ? "9+" : badge}</span>}
       </button>
       {open && (
         <div className="pm-pop">
@@ -1800,18 +1828,23 @@ function ProfileMenu() {
             </div>
           </div>
 
-          <div className="pm-sect-t">Notifications</div>
+          <div className="pm-sect-t pm-sect-row">
+            <span>Notifications</span>
+            {visible.length > 0 && <button className="pm-clear" onClick={clearAll}>Clear all</button>}
+          </div>
           <div className="pm-notifs">
-            {count === 0
+            {visible.length === 0
               ? <div className="pm-empty">You're all caught up ✨</div>
-              : notifs.map(n => {
+              : visible.map(n => {
                 const NIcon = n.icon;
                 return (
-                  <button key={n.id} className="pm-notif" onClick={() => go(n.to)}>
-                    <span className={`pm-nic tone-${n.tone}`}><NIcon size={14} strokeWidth={2.5} /></span>
-                    <span className="pm-ntext">{n.text}</span>
-                    <ChevronRight size={14} className="pm-nchev" />
-                  </button>
+                  <div key={n.id} className="pm-notif">
+                    <button className="pm-ntap" onClick={() => go(n.to)}>
+                      <span className={`pm-nic tone-${n.tone}`}><NIcon size={14} strokeWidth={2.5} /></span>
+                      <span className="pm-ntext">{n.text}</span>
+                    </button>
+                    <button className="pm-nx" onClick={() => dismiss(n.id)} aria-label="Dismiss notification"><X size={13} strokeWidth={2.6} /></button>
+                  </div>
                 );
               })}
           </div>
@@ -2666,8 +2699,14 @@ em{font-style:normal;color:var(--primary)}
 .pm-sub{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
 .pm-sect-t{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 10px 5px;font-family:var(--disp)}
 .pm-notifs{display:flex;flex-direction:column;gap:2px;max-height:230px;overflow-y:auto}
-.pm-notif{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer;text-align:left;width:100%;transition:.12s}
+.pm-notif{display:flex;align-items:center;border-radius:10px;transition:.12s}
 .pm-notif:hover{background:var(--card2)}
+.pm-ntap{flex:1;display:flex;align-items:center;gap:10px;padding:9px 4px 9px 10px;cursor:pointer;text-align:left;min-width:0;background:none}
+.pm-nx{flex:none;width:26px;height:26px;margin-right:6px;border-radius:7px;display:grid;place-items:center;color:var(--muted);cursor:pointer;opacity:.5;transition:.12s}
+.pm-nx:hover{opacity:1;background:var(--line);color:var(--ink)}
+.pm-sect-row{display:flex;align-items:center;justify-content:space-between}
+.pm-clear{font-size:11px;font-weight:700;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0;font-family:var(--font);padding:2px 5px;border-radius:6px;transition:.12s}
+.pm-clear:hover{color:var(--primary);background:var(--card2)}
 .pm-nic{flex:none;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--card2)}
 .pm-nic.tone-gold{background:var(--gold-l);color:var(--gold)}
 .pm-nic.tone-cyan{background:var(--cyan-l);color:var(--cyan)}
@@ -2675,7 +2714,6 @@ em{font-style:normal;color:var(--primary)}
 .pm-nic.tone-primary{background:var(--primary-l);color:var(--primary)}
 .pm-nic.tone-muted{background:var(--card2);color:var(--ink2)}
 .pm-ntext{flex:1;font-size:12.8px;line-height:1.35;color:var(--ink2);font-weight:500;min-width:0}
-.pm-nchev{flex:none;color:var(--muted)}
 .pm-empty{padding:12px 10px 14px;text-align:center;color:var(--muted);font-size:13px;font-weight:500}
 .pm-links{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
 .pm-link{display:flex;align-items:center;gap:11px;padding:10px;border-radius:10px;cursor:pointer;text-align:left;width:100%;font-weight:600;font-size:13.5px;color:var(--ink2);font-family:var(--disp);transition:.12s}
