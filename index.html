@@ -1735,6 +1735,103 @@ function SettingsScreen() {
 /* ============================================================
    NAV
    ============================================================ */
+function ProfileMenu() {
+  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen } = useApp();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const isClient = user.type === "client";
+
+  function close() { setOpen(false); markMsgsSeen(); }
+  function toggle() { if (open) close(); else { setOpen(true); play("pop"); refreshMsgNotifs(); } }
+  function go(to) { setView(to); close(); }
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = e => { if (ref.current && !ref.current.contains(e.target)) close(); };
+    const onKey = e => { if (e.key === "Escape") close(); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+    /* eslint-disable-next-line */
+  }, [open]);
+
+  const mine = jobs.filter(j => (isClient ? j.postedBy : j.claimedBy) === user.id);
+  const notifs = [];
+  if (isClient) {
+    mine.filter(j => j.status === "submitted").forEach(j =>
+      notifs.push({ id: "rev-" + j.id, icon: Eye, tone: "gold", text: `Review “${j.title}” — work submitted`, to: "jobs" }));
+    mine.filter(j => j.status === "open" && j.releaseNote).forEach(j =>
+      notifs.push({ id: "rel-" + j.id, icon: RefreshCw, tone: "muted", text: `“${j.title}” came back unfinished`, to: "jobs" }));
+  } else {
+    mine.filter(j => j.status === "claimed" && j.reviewNote).forEach(j =>
+      notifs.push({ id: "chg-" + j.id, icon: RefreshCw, tone: "cyan", text: `Changes requested on “${j.title}”`, to: "tasks" }));
+    const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
+    if (available > 0) notifs.push({
+      id: "pay", icon: DollarSign, tone: "mint", to: "settings",
+      text: user.payoutsEnabled ? `${money(available)} ready to cash out` : `${money(available)} earned — set up payouts`,
+    });
+  }
+  msgNotifs.forEach(m => {
+    const job = jobs.find(j => j.id === m.jobId);
+    notifs.push({
+      id: "msg-" + m.jobId, icon: MessageCircle, tone: "primary", to: isClient ? "jobs" : "tasks",
+      text: `${m.count} new message${m.count > 1 ? "s" : ""} from ${m.name || "someone"}${job ? " · " + job.title : ""}`,
+    });
+  });
+  const count = notifs.length;
+
+  const shortcuts = isClient
+    ? [["Post a quest", Plus, "post"], ["My quests", Briefcase, "jobs"], ["Settings", Settings, "settings"]]
+    : [["Browse quests", Search, "browse"], ["My tasks", ListChecks, "tasks"], ["Rewards", Trophy, "rewards"], ["Earnings & payouts", DollarSign, "settings"], ["Settings", Settings, "settings"]];
+
+  return (
+    <div className="profile-menu" ref={ref}>
+      <button className={`nav-user ${open ? "on" : ""}`} onClick={toggle} aria-label="Profile & notifications">
+        <span className="nav-ava">{(user.name || "?")[0]}</span>
+        {count > 0 && <span className="notif-badge">{count > 9 ? "9+" : count}</span>}
+      </button>
+      {open && (
+        <div className="pm-pop">
+          <div className="pm-head">
+            <span className="nav-ava lg">{(user.name || "?")[0]}</span>
+            <div className="pm-id">
+              <div className="pm-name">{user.name}</div>
+              <div className="pm-sub">{user.email} · {isClient ? "Client" : "Quester"}</div>
+            </div>
+          </div>
+
+          <div className="pm-sect-t">Notifications</div>
+          <div className="pm-notifs">
+            {count === 0
+              ? <div className="pm-empty">You're all caught up ✨</div>
+              : notifs.map(n => {
+                const NIcon = n.icon;
+                return (
+                  <button key={n.id} className="pm-notif" onClick={() => go(n.to)}>
+                    <span className={`pm-nic tone-${n.tone}`}><NIcon size={14} strokeWidth={2.5} /></span>
+                    <span className="pm-ntext">{n.text}</span>
+                    <ChevronRight size={14} className="pm-nchev" />
+                  </button>
+                );
+              })}
+          </div>
+
+          <div className="pm-sect-t">Shortcuts</div>
+          <div className="pm-links">
+            {shortcuts.map(([label, Icon, to]) => (
+              <button key={to + label} className="pm-link" onClick={() => go(to)}>
+                <Icon size={15} strokeWidth={2.3} /><span>{label}</span>
+              </button>
+            ))}
+            <button className="pm-link danger" onClick={() => { setOpen(false); logout(); }}>
+              <LogOut size={15} strokeWidth={2.3} /><span>Log out</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 function Nav() {
   const { user, view, setView, ui, setUi } = useApp();
   const tabs = user.type === "client"
@@ -1756,7 +1853,7 @@ function Nav() {
             onClick={() => setUi(u => ({ ...u, soundOn: !u.soundOn }))} sound="toggle" />
           <IconBtn icon={ui.stim === "high" ? Zap : Wind} label="Toggle energy mode" active={ui.stim === "high"}
             onClick={() => setUi(u => ({ ...u, stim: u.stim === "high" ? "low" : "high" }))} sound="pop" />
-          <div className="nav-user"><span className="nav-ava">{user.name[0]}</span></div>
+          <ProfileMenu />
         </div>
       </div>
     </nav>
@@ -1823,6 +1920,7 @@ function App() {
   const [toasts, setToasts] = useState([]);
   const [confetti, setConfetti] = useState(0);
   const [focusJob, setFocusJob] = useState(null);
+  const [msgNotifs, setMsgNotifs] = useState([]);
 
   const reduceMotion = useRef(false);
   useEffect(() => {
@@ -2117,6 +2215,42 @@ function App() {
     if (profile) setUser(profile);
   }
 
+  // Unread-message notifications: messages from the other party newer than the
+  // last time this user opened their menu (tracked in localStorage). RLS limits
+  // results to conversations the user is part of, so this is safe.
+  async function refreshMsgNotifs(u) {
+    const id = (u || user) && (u || user).id;
+    if (!id) return;
+    let seen = 0;
+    try {
+      const raw = localStorage.getItem("sq_seen_" + id);
+      if (raw == null) { seen = Date.now(); localStorage.setItem("sq_seen_" + id, String(seen)); }
+      else seen = Number(raw) || 0;
+    } catch (e) {}
+    const { data } = await supabase.from("messages")
+      .select("job_id, sender_name, created_at")
+      .neq("sender_id", id).gt("created_at", seen)
+      .order("created_at", { ascending: false }).limit(60);
+    const map = new Map();
+    (data || []).forEach(m => {
+      const e = map.get(m.job_id) || { jobId: m.job_id, name: m.sender_name, count: 0 };
+      e.count++; map.set(m.job_id, e);
+    });
+    setMsgNotifs(Array.from(map.values()));
+  }
+  function markMsgsSeen() {
+    if (!user) return;
+    try { localStorage.setItem("sq_seen_" + user.id, String(Date.now())); } catch (e) {}
+    setMsgNotifs([]);
+  }
+  useEffect(() => {
+    if (phase !== "app" || !user) return;
+    refreshMsgNotifs();
+    const t = setInterval(() => refreshMsgNotifs(), 60000);
+    return () => clearInterval(t);
+    /* eslint-disable-next-line */
+  }, [phase, user && user.id]);
+
   // Handle returns from Stripe Checkout / Connect onboarding (query flags).
   useEffect(() => {
     if (phase !== "app") return;
@@ -2168,6 +2302,7 @@ function App() {
     submitJob, approveJob, requestChanges,
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
     setHomeLocation, refreshProfile, releaseJob,
+    msgNotifs, refreshMsgNotifs, markMsgsSeen,
   };
 
   return (
@@ -2300,7 +2435,7 @@ em{font-style:normal;color:var(--primary)}
 .btn-lg{padding:14px 22px;font-size:15px;border-radius:14px}
 .btn-full{width:100%}
 .btn:active{transform:translateY(1px) scale(.985)}
-.btn-primary{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 12px 30px -12px rgba(var(--p-rgb),.9),0 0 0 1px rgba(255,120,140,.25) inset}
+.btn-primary{background:linear-gradient(120deg,var(--primary),var(--accent));color:#fff;box-shadow:0 12px 30px -12px rgba(var(--p-rgb),.9),0 0 0 1px rgba(255,120,140,.25) inset}
 .btn-primary:hover{filter:brightness(1.08);box-shadow:0 16px 38px -12px rgba(var(--p-rgb),1),0 0 24px -6px var(--pglow)}
 .btn-primary::before{content:"";position:absolute;top:0;left:-60%;width:38%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-20deg)}
 .btn-primary:hover::before{animation:sheen .7s ease}
@@ -2386,7 +2521,7 @@ em{font-style:normal;color:var(--primary)}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:5px;background:#1A0C10;padding:5px;border-radius:13px;border:1px solid var(--line)}
 .seg button{padding:11px;border-radius:10px;font-weight:700;font-size:13.5px;color:var(--ink2);display:flex;align-items:center;justify-content:center;gap:7px;transition:.18s;font-family:var(--disp)}
-.seg button.on{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 0 20px -6px var(--pglow)}
+.seg button.on{background:linear-gradient(120deg,var(--primary),var(--accent));color:#fff;box-shadow:0 0 20px -6px var(--pglow)}
 .seg-mode button.on{background:var(--card2);color:#fff;box-shadow:none;border:1px solid var(--line2)}
 .auth-fields{display:flex;flex-direction:column;gap:2px}
 .auth-err{display:flex;align-items:center;gap:7px;background:var(--accent-l);color:#ff8ea0;padding:10px 13px;border-radius:11px;font-weight:600;font-size:13.5px;margin:6px 0 12px;border:1px solid #7a1228}
@@ -2513,9 +2648,42 @@ em{font-style:normal;color:var(--primary)}
 .nav-tabs::-webkit-scrollbar{height:0}
 .nav-tab{display:flex;align-items:center;gap:7px;padding:9px 15px;border-radius:10px;font-weight:700;font-size:13px;color:var(--ink2);transition:.16s;white-space:nowrap;font-family:var(--disp)}
 .nav-tab:hover{color:#fff}
-.nav-tab.on{background:linear-gradient(120deg,var(--primary),#FF3D5E);color:#fff;box-shadow:0 0 18px -6px var(--pglow)}
+.nav-tab.on{background:linear-gradient(120deg,var(--primary),var(--accent));color:#fff;box-shadow:0 0 18px -6px var(--pglow)}
 .nav-right{margin-left:auto;display:flex;align-items:center;gap:9px}
 .nav-ava{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;display:grid;place-items:center;font-weight:700;font-size:15px;text-transform:uppercase;box-shadow:0 0 18px -6px var(--pglow);font-family:var(--disp)}
+
+/* profile dropdown */
+.profile-menu{position:relative}
+.nav-user{position:relative;display:block;border-radius:50%;cursor:pointer;transition:.15s}
+.nav-user:hover{transform:translateY(-1px)}
+.nav-user.on .nav-ava,.nav-user:hover .nav-ava{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--primary)}
+.notif-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--primary);color:#fff;font-size:11px;font-weight:800;font-family:var(--disp);display:grid;place-items:center;border:2px solid var(--bg);box-shadow:0 0 10px -2px var(--pglow)}
+.pm-pop{position:absolute;top:calc(100% + 10px);right:0;width:312px;max-width:86vw;background:var(--card);border:1px solid var(--line2);border-radius:16px;box-shadow:0 24px 60px -16px rgba(0,0,0,.7);padding:8px;z-index:120;animation:rise .18s ease}
+.pm-head{display:flex;align-items:center;gap:11px;padding:10px 10px 12px}
+.nav-ava.lg{width:46px;height:46px;font-size:18px;flex:none}
+.pm-id{min-width:0}
+.pm-name{font-family:var(--disp);font-weight:800;font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-sub{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.pm-sect-t{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 10px 5px;font-family:var(--disp)}
+.pm-notifs{display:flex;flex-direction:column;gap:2px;max-height:230px;overflow-y:auto}
+.pm-notif{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer;text-align:left;width:100%;transition:.12s}
+.pm-notif:hover{background:var(--card2)}
+.pm-nic{flex:none;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--card2)}
+.pm-nic.tone-gold{background:var(--gold-l);color:var(--gold)}
+.pm-nic.tone-cyan{background:var(--cyan-l);color:var(--cyan)}
+.pm-nic.tone-mint{background:var(--mint-l);color:var(--mint)}
+.pm-nic.tone-primary{background:var(--primary-l);color:var(--primary)}
+.pm-nic.tone-muted{background:var(--card2);color:var(--ink2)}
+.pm-ntext{flex:1;font-size:12.8px;line-height:1.35;color:var(--ink2);font-weight:500;min-width:0}
+.pm-nchev{flex:none;color:var(--muted)}
+.pm-empty{padding:12px 10px 14px;text-align:center;color:var(--muted);font-size:13px;font-weight:500}
+.pm-links{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
+.pm-link{display:flex;align-items:center;gap:11px;padding:10px;border-radius:10px;cursor:pointer;text-align:left;width:100%;font-weight:600;font-size:13.5px;color:var(--ink2);font-family:var(--disp);transition:.12s}
+.pm-link:hover{background:var(--card2);color:var(--ink)}
+.pm-link svg{color:var(--muted)}
+.pm-link:hover svg{color:var(--primary)}
+.pm-link.danger:hover{background:var(--primary-l);color:var(--accent)}
+.pm-link.danger:hover svg{color:var(--accent)}
 
 /* ===== PAGE ===== */
 .main{max-width:1160px;margin:0 auto;padding:clamp(20px,3vw,38px) clamp(16px,3vw,28px) 80px;position:relative;z-index:2}
