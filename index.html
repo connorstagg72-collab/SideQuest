@@ -162,6 +162,7 @@ function rowToMsg(r) {
 function profilePatchToRow(p) {
   const r = {};
   if ("name" in p) r.name = p.name;
+  if ("type" in p) r.type = p.type;
   if ("settings" in p) r.settings = p.settings;
   if ("xp" in p) r.xp = p.xp;
   if ("level" in p) r.level = p.level;
@@ -401,6 +402,25 @@ async function signedProofUrl(path) {
     if (error || !data) return null;
     return data.signedUrl;
   } catch (e) { return null; }
+}
+
+/* ---------- device notifications (opt-in) ---------- */
+// Shows a system notification via the service worker (falls back to the
+// Notifications API). By default it only fires when the tab isn't focused, so
+// it never doubles up with the in-app toast; pass {force:true} for a test.
+function deviceNotify(title, body, opts) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (!(opts && opts.force) && typeof document !== "undefined" && !document.hidden) return;
+    const o = { body: body || "", tag: opts && opts.tag, renotify: false, data: { url: location.href } };
+    if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.showNotification(title, o))
+        .catch(() => { try { new Notification(title, o); } catch (e) {} });
+    } else {
+      new Notification(title, o);
+    }
+  } catch (e) {}
 }
 
 /* ---------- synthesized sound (Web Audio) ---------- */
@@ -1590,12 +1610,29 @@ function Toggle({ on, onChange, label, hint, icon: Icon }) {
   );
 }
 function SettingsScreen() {
-  const { user, saveSettings, logout, toast, refreshProfile } = useApp();
+  const { user, saveSettings, logout, toast, refreshProfile, switchMode } = useApp();
   const s = user.settings || {};
   const [name, setName] = useState(user.name);
   const [busyPay, setBusyPay] = useState(false);
   const set = patch => saveSettings(patch);
   const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
+  const canNotify = ("Notification" in window) && Notification.permission === "granted";
+  const notifBlocked = ("Notification" in window) && Notification.permission === "denied";
+
+  async function toggleDevicePush(on) {
+    if (!on) { set({ push: false }); toast("Device notifications off.", "info"); return; }
+    if (!("Notification" in window)) { toast("This browser doesn't support notifications.", "info"); return; }
+    let perm = Notification.permission;
+    if (perm === "default") perm = await Notification.requestPermission();
+    if (perm === "granted") {
+      set({ push: true });
+      deviceNotify("Notifications on ✅", "You'll get a heads-up here when your quests update.", { force: true });
+      toast("Device notifications on.", "success");
+    } else {
+      set({ push: false });
+      toast("Notifications are blocked — allow them for this site in your browser, then try again.", "info");
+    }
+  }
 
   async function connectPayouts() {
     setBusyPay(true);
@@ -1631,6 +1668,32 @@ function SettingsScreen() {
           onBlur={() => saveName(name)} />
         <Btn variant="soft" size="sm" icon={Check} onClick={() => saveName(name)}>Save name</Btn>
         <div className="set-meta"><span className="cap">Account</span> {user.email} · {user.type === "client" ? "Client" : "Worker"}</div>
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><RefreshCw size={17} /> Account mode</h2>
+        <p className="set-p">Switch anytime — post quests as a client, or browse and earn as a quester. It's the same account either way.</p>
+        <div className="stim-toggle">
+          <button className={user.type === "client" ? "on" : ""} onClick={() => switchMode("client")}>
+            <Briefcase size={16} /> Client
+            <small>Post &amp; manage quests</small>
+          </button>
+          <button className={user.type === "worker" ? "on" : ""} onClick={() => switchMode("worker")}>
+            <Rocket size={16} /> Quester
+            <small>Browse, claim &amp; earn</small>
+          </button>
+        </div>
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><Bell size={17} /> Notifications</h2>
+        <p className="set-p">Get a notification on this device when your quests update or someone messages you.</p>
+        <Toggle icon={Bell} label="Notifications on this device" hint="Claims, submissions, approvals, change requests & messages"
+          on={!!s.push && canNotify} onChange={toggleDevicePush} />
+        {!!s.push && canNotify && (
+          <Btn variant="soft" size="sm" icon={Bell} onClick={() => deviceNotify("Test notification 🔔", "This is how your alerts will look.", { force: true })}>Send a test</Btn>
+        )}
+        {notifBlocked && <p className="auth-fine">Notifications are blocked for this site in your browser — you'll need to allow them in site settings first.</p>}
       </div>
 
       <div className="card set-card">
@@ -1709,7 +1772,6 @@ function SettingsScreen() {
           <h2 className="set-h"><Brain size={17} /> Work style</h2>
           <div className="field-label">Default energy when browsing</div>
           <div className="chips">{ENERGIES.map(e => <Chip key={e} active={s.energy === e} onClick={() => set({ energy: e })}>{e}</Chip>)}</div>
-          <Toggle icon={Bell} label="Quest reminders" hint="Nudge me before a scheduled start (demo)" on={s.reminders} onChange={v => set({ reminders: v })} />
         </div>
       )}
 
@@ -1722,7 +1784,6 @@ function SettingsScreen() {
               <input className="field-input field-money" type="number" min="1" value={s.defaultPayout || 60} onChange={e => set({ defaultPayout: Number(e.target.value) })} />
             </div>
           </label>
-          <Toggle icon={Bell} label="Notify me when a quest is claimed" hint="Get a heads-up the moment someone grabs it (demo)" on={s.notify} onChange={v => set({ notify: v })} />
         </div>
       )}
 
@@ -1738,7 +1799,7 @@ function SettingsScreen() {
 function loadIdSet(key) { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); } }
 function saveIdSet(key, set) { try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) {} }
 function ProfileMenu() {
-  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen } = useApp();
+  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode } = useApp();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const isClient = user.type === "client";
@@ -1827,6 +1888,11 @@ function ProfileMenu() {
               <div className="pm-sub">{user.email} · {isClient ? "Client" : "Quester"}</div>
             </div>
           </div>
+
+          <button className="pm-mode" onClick={() => { switchMode(isClient ? "worker" : "client"); close(); }}>
+            <RefreshCw size={15} strokeWidth={2.4} />
+            <span>Switch to <strong>{isClient ? "Quester" : "Client"}</strong> mode</span>
+          </button>
 
           <div className="pm-sect-t pm-sect-row">
             <span>Notifications</span>
@@ -2092,6 +2158,19 @@ function App() {
     if (patch.stim || patch.soundOn !== undefined || newName) toast("Settings saved.", "info");
   }
   function setEnergy(e) { saveSettings({ energy: e }); }
+  function switchMode(type) {
+    if (!user || (type !== "client" && type !== "worker") || user.type === type) return;
+    updateUser({ type });
+    setView(type === "client" ? "post" : "browse");
+    play("pop");
+    toast(type === "client" ? "You're in Client mode — post & manage quests." : "You're in Quester mode — browse & earn.", "success");
+  }
+  function pushNote(title, body) {
+    if (user && user.settings && user.settings.push) deviceNotify(title, body);
+  }
+  useEffect(() => {
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  }, []);
 
   // keep ui (nav toggles) in sync to the saved profile when logged in
   useEffect(() => {
@@ -2251,6 +2330,7 @@ function App() {
   // Unread-message notifications: messages from the other party newer than the
   // last time this user opened their menu (tracked in localStorage). RLS limits
   // results to conversations the user is part of, so this is safe.
+  const lastMsgTsRef = useRef(null);
   async function refreshMsgNotifs(u) {
     const id = (u || user) && (u || user).id;
     if (!id) return;
@@ -2264,12 +2344,23 @@ function App() {
       .select("job_id, sender_name, created_at")
       .neq("sender_id", id).gt("created_at", seen)
       .order("created_at", { ascending: false }).limit(60);
+    const rows = data || [];
     const map = new Map();
-    (data || []).forEach(m => {
+    rows.forEach(m => {
       const e = map.get(m.job_id) || { jobId: m.job_id, name: m.sender_name, count: 0 };
       e.count++; map.set(m.job_id, e);
     });
     setMsgNotifs(Array.from(map.values()));
+    // fire a device notification for messages that arrived since the last check
+    const newest = rows.reduce((mx, m) => Math.max(mx, Number(m.created_at) || 0), 0);
+    const prevTs = lastMsgTsRef.current;
+    if (prevTs == null) { lastMsgTsRef.current = newest; }
+    else if (newest > prevTs) {
+      const fresh = rows.filter(m => (Number(m.created_at) || 0) > prevTs);
+      lastMsgTsRef.current = newest;
+      if (fresh.length) pushNote("New message" + (fresh.length > 1 ? "s" : ""),
+        fresh.length === 1 ? `From ${fresh[0].sender_name || "someone"}` : `${fresh.length} new messages`);
+    }
   }
   function markMsgsSeen() {
     if (!user) return;
@@ -2318,12 +2409,16 @@ function App() {
       if (j.claimedBy === user.id && j.status === "completed" && p.status !== "completed") {
         refreshProfile(); celebrate(true);
         toast(`Your work on “${j.title}” was approved! 🎉`, "success");
+        pushNote("Work approved 🎉", `“${j.title}” — payment released to you.`);
       } else if (j.claimedBy === user.id && j.status === "claimed" && p.status === "submitted") {
         toast(`“${j.title}” needs a few changes — check your tasks.`, "info");
+        pushNote("Changes requested", `“${j.title}” — the client asked for a few tweaks.`);
       } else if (j.postedBy === user.id && j.status === "submitted" && p.status !== "submitted") {
         toast(`“${j.title}” was submitted — ready for your review.`, "info");
+        pushNote("Work submitted for review", `“${j.title}” — review the photos and approve.`);
       } else if (j.postedBy === user.id && j.status === "claimed" && p.status === "open") {
         toast(`${j.claimedByName || "Someone"} claimed “${j.title}”.`, "info");
+        pushNote("Quest claimed", `${j.claimedByName || "Someone"} claimed “${j.title}”.`);
       }
     });
     /* eslint-disable-next-line */
@@ -2334,7 +2429,7 @@ function App() {
     signup, login, demoLogin, logout, postJob, deleteJob, claimJob, setSteps,
     submitJob, approveJob, requestChanges,
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
-    setHomeLocation, refreshProfile, releaseJob,
+    setHomeLocation, refreshProfile, releaseJob, switchMode,
     msgNotifs, refreshMsgNotifs, markMsgsSeen,
   };
 
@@ -2694,6 +2789,10 @@ em{font-style:normal;color:var(--primary)}
 .pm-pop{position:absolute;top:calc(100% + 10px);right:0;width:312px;max-width:86vw;background:var(--card);border:1px solid var(--line2);border-radius:16px;box-shadow:0 24px 60px -16px rgba(0,0,0,.7);padding:8px;z-index:120;animation:rise .18s ease}
 .pm-head{display:flex;align-items:center;gap:11px;padding:10px 10px 12px}
 .nav-ava.lg{width:46px;height:46px;font-size:18px;flex:none}
+.pm-mode{display:flex;align-items:center;gap:9px;width:100%;margin:0 0 4px;padding:11px 12px;border-radius:11px;background:var(--primary-l);border:1px solid var(--line2);color:var(--ink);font-family:var(--disp);font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
+.pm-mode:hover{border-color:var(--primary)}
+.pm-mode svg{color:var(--primary);flex:none}
+.pm-mode strong{color:var(--primary);font-weight:800}
 .pm-id{min-width:0}
 .pm-name{font-family:var(--disp);font-weight:800;font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pm-sub{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
