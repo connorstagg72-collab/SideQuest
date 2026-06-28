@@ -147,6 +147,9 @@ function rowToJob(r) {
     lng: r.longitude != null ? Number(r.longitude) : null,
     releaseNote: r.release_note || "",
     releaseReason: r.release_reason || "",
+    proofImages: Array.isArray(r.proof_images) ? r.proof_images : [],
+    reviewNote: r.review_note || "",
+    submittedAt: r.submitted_at != null ? Number(r.submitted_at) : null,
   };
 }
 function rowToMsg(r) {
@@ -190,6 +193,9 @@ function jobPatchToRow(p) {
   if ("lng" in p) r.longitude = p.lng;
   if ("releaseNote" in p) r.release_note = p.releaseNote;
   if ("releaseReason" in p) r.release_reason = p.releaseReason;
+  if ("proofImages" in p) r.proof_images = p.proofImages;
+  if ("reviewNote" in p) r.review_note = p.reviewNote;
+  if ("submittedAt" in p) r.submitted_at = p.submittedAt;
   return r;
 }
 
@@ -381,6 +387,22 @@ async function callFn(name, body) {
   return json || {};
 }
 
+/* ---------- proof-photo storage (private 'proofs' bucket) ---------- */
+async function uploadProof(jobId, file) {
+  const safe = (file.name || "photo").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = jobId + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 7) + "-" + safe;
+  const { error } = await supabase.storage.from("proofs").upload(path, file, { upsert: false, contentType: file.type || undefined });
+  if (error) throw error;
+  return path;
+}
+async function signedProofUrl(path) {
+  try {
+    const { data, error } = await supabase.storage.from("proofs").createSignedUrl(path, 3600);
+    if (error || !data) return null;
+    return data.signedUrl;
+  } catch (e) { return null; }
+}
+
 /* ---------- synthesized sound (Web Audio) ---------- */
 let AC = null;
 function ctx() {
@@ -536,7 +558,7 @@ function Bar({ value, tone = "primary", height = 10 }) {
   return <div className="bar" style={{ height }}><div className={`bar-fill bar-${tone}`} style={{ width: Math.max(0, Math.min(100, value)) + "%" }} /></div>;
 }
 function StatusBadge({ status }) {
-  const map = { open: ["Open", "open"], claimed: ["Claimed", "claimed"], completed: ["Done", "done"] };
+  const map = { open: ["Open", "open"], claimed: ["Claimed", "claimed"], submitted: ["In review", "review"], completed: ["Done", "done"] };
   const [t, c] = map[status] || ["", ""];
   return <span className={`sbadge sbadge-${c}`}>{status === "completed" && <Check size={12} strokeWidth={3} />}{t}</span>;
 }
@@ -939,7 +961,9 @@ function PostQuestForm() {
   );
 }
 function ClientJobCard({ job }) {
-  const { deleteJob } = useApp();
+  const { deleteJob, approveJob, requestChanges } = useApp();
+  const [reviewing, setReviewing] = useState(false);
+  const [rnote, setRnote] = useState("");
   return (
     <div className={`card jobcard jobcard-${job.status}`}>
       <div className="jc-top">
@@ -959,12 +983,35 @@ function ClientJobCard({ job }) {
           <User size={14} /> <strong>{job.claimedByName}</strong> claimed it · doing it {fmtWhen(job.scheduledTime)}
         </div>
       )}
-      {job.status === "completed" && (
-        <div className="claim-strip done-strip">
-          <CheckCircle2 size={14} /> Completed by <strong>{job.claimedByName}</strong>
+      {job.status === "submitted" && (
+        <div className="review-box">
+          <div className="claim-strip review-wait"><Eye size={14} /> <strong>{job.claimedByName}</strong> submitted their work — review the photos and approve to release {money(job.payout)}.</div>
+          <ProofGallery paths={job.proofImages} />
+          {!reviewing ? (
+            <div className="review-actions">
+              <Btn variant="ghost" size="sm" icon={RefreshCw} onClick={() => { setReviewing(true); play("toggle"); }}>Request changes</Btn>
+              <Btn variant="success" size="sm" icon={CheckCircle2} onClick={() => approveJob(job.id)} sound="success">Approve &amp; release {money(job.payout)}</Btn>
+            </div>
+          ) : (
+            <div className="review-changes">
+              <textarea className="field-input" rows="2" placeholder="What needs fixing before you approve?" value={rnote} onChange={e => setRnote(e.target.value)} />
+              <div className="review-actions">
+                <Btn variant="ghost" size="sm" onClick={() => { setReviewing(false); setRnote(""); }}>Cancel</Btn>
+                <Btn variant="ghostdanger" size="sm" icon={ArrowRight} onClick={() => { requestChanges(job.id, rnote); setReviewing(false); setRnote(""); }}>Send back</Btn>
+              </div>
+            </div>
+          )}
         </div>
       )}
-      {(job.status === "claimed" || job.status === "completed") && <JobChat job={job} />}
+      {job.status === "completed" && (
+        <>
+          <div className="claim-strip done-strip">
+            <CheckCircle2 size={14} /> Completed by <strong>{job.claimedByName}</strong> · paid {money(job.payout)}
+          </div>
+          <ProofGallery paths={job.proofImages} />
+        </>
+      )}
+      {(job.status === "claimed" || job.status === "submitted" || job.status === "completed") && <JobChat job={job} />}
       {job.status === "open" && job.releaseNote && (
         <div className="note-strip">
           <RefreshCw size={13} />
@@ -985,7 +1032,7 @@ function ClientHome() {
     .filter(j => j.postedBy === user.id && j.status !== "pending_payment")
     .sort((a, b) => b.createdAt - a.createdAt);
   const open = mine.filter(j => j.status === "open").length;
-  const claimed = mine.filter(j => j.status === "claimed").length;
+  const claimed = mine.filter(j => j.status === "claimed" || j.status === "submitted").length;
   const done = mine.filter(j => j.status === "completed").length;
 
   if (view === "post") {
@@ -1090,12 +1137,37 @@ function BrowseCard({ job, distance }) {
   );
 }
 function TaskCard({ job }) {
-  const { setSteps, completeJob, setFocusJob, releaseJob } = useApp();
+  const { setSteps, submitJob, setFocusJob, releaseJob, toast } = useApp();
   const [newStep, setNewStep] = useState("");
   const [giveUp, setGiveUp] = useState(false);
   const [reason, setReason] = useState("Something came up");
   const [note, setNote] = useState("");
+  const [photos, setPhotos] = useState([]);
+  const [upBusy, setUpBusy] = useState(false);
+  const fileRef = useRef(null);
+  const submitted = job.status === "submitted";
   const steps = job.steps || [];
+
+  async function onFiles(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setUpBusy(true);
+    for (const f of files) {
+      if (!f.type || !f.type.startsWith("image/")) { toast("Only image files, please.", "info"); continue; }
+      try {
+        const path = await uploadProof(job.id, f);
+        setPhotos(prev => [...prev, { path, preview: URL.createObjectURL(f), name: f.name }]);
+      } catch (err) { console.error(err); toast("Upload failed for " + (f.name || "a photo") + " — is Storage set up?", "error"); }
+    }
+    setUpBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+  function removePhoto(path) { setPhotos(prev => prev.filter(p => p.path !== path)); }
+  async function submitForReview() {
+    if (upBusy) return;
+    if (photos.length === 0) { play("error"); toast("Add at least one photo of your finished work first.", "info"); return; }
+    await submitJob(job.id, photos.map(p => p.path));
+  }
   const doneCount = steps.filter(s => s.done).length;
   const pct = steps.length ? Math.round((doneCount / steps.length) * 100) : 0;
 
@@ -1113,6 +1185,22 @@ function TaskCard({ job }) {
   };
   const removeStep = id => { play("toggle"); setSteps(job.id, steps.filter(s => s.id !== id)); };
 
+  if (submitted) {
+    return (
+      <div className="card jobcard task-card">
+        <div className="jc-top">
+          <span className="cat-tag">{job.category}</span>
+          <StatusBadge status="submitted" />
+        </div>
+        <h3 className="jc-title">{job.title}</h3>
+        <div className="claim-strip review-wait"><Clock size={14} /> Submitted — waiting for <strong>{job.postedByName}</strong> to review your work and release {money(job.payout)}.</div>
+        <div className="field-label" style={{ marginTop: 4 }}>Photos you submitted</div>
+        <ProofGallery paths={job.proofImages} />
+        <JobChat job={job} />
+      </div>
+    );
+  }
+
   return (
     <div className="card jobcard task-card">
       <div className="jc-top">
@@ -1125,6 +1213,12 @@ function TaskCard({ job }) {
         <div className="note-strip">
           <RefreshCw size={13} />
           <span><strong>Picked up after a previous attempt.</strong> They noted: “{job.releaseNote}”</span>
+        </div>
+      )}
+      {job.reviewNote && (
+        <div className="note-strip review-strip">
+          <RefreshCw size={13} />
+          <span><strong>Client asked for changes:</strong> “{job.reviewNote}” — update your photos and resubmit.</span>
         </div>
       )}
 
@@ -1152,9 +1246,26 @@ function TaskCard({ job }) {
         <Btn variant="soft" size="sm" icon={Plus} onClick={addStep}>Add</Btn>
       </div>
 
+      <div className="proof-up">
+        <div className="steps-head"><span><Eye size={15} /> Proof photos</span><span className="muted-inline">required to submit</span></div>
+        <div className="proof-grid">
+          {photos.map(p => (
+            <div key={p.path} className="proof-thumb up">
+              <img src={p.preview} alt={p.name} />
+              <button className="proof-rm" onClick={() => removePhoto(p.path)} aria-label="Remove photo"><X size={12} strokeWidth={3} /></button>
+            </div>
+          ))}
+          <button className="proof-add" onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy}>
+            {upBusy ? <span className="spin"><RefreshCw size={18} /></span> : <Plus size={20} strokeWidth={2.6} />}
+            <span>{upBusy ? "Uploading…" : "Add photo"}</span>
+          </button>
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onFiles} />
+      </div>
+
       <div className="task-actions">
         <Btn variant="ghost" icon={Wind} onClick={() => { play("pop"); setFocusJob(job); }}>Focus sprint</Btn>
-        <Btn variant="success" icon={CheckCircle2} onClick={() => completeJob(job.id)} sound="success">Mark complete</Btn>
+        <Btn variant="success" icon={CheckCircle2} onClick={submitForReview} disabled={photos.length === 0 || upBusy} sound="success">Submit for review</Btn>
       </div>
 
       <JobChat job={job} />
@@ -1202,6 +1313,29 @@ function PayoutHint() {
         You keep the <strong>full payout</strong> on every quest. Cash out anytime from{" "}
         <button className="linklike" onClick={() => setView("settings")}>Settings</button>{setUp ? "" : " (connect a payout account first)"} — money then lands in your bank automatically. Your first payout takes about 7–14 days while Stripe verifies you, then deposits usually arrive within ~2 business days.
       </span>
+    </div>
+  );
+}
+function ProofGallery({ paths }) {
+  const [urls, setUrls] = useState([]);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const out = [];
+      for (const p of (paths || [])) { const u = await signedProofUrl(p); if (u) out.push({ path: p, url: u }); }
+      if (active) setUrls(out);
+    })();
+    return () => { active = false; };
+  }, [JSON.stringify(paths || [])]);
+  if (!paths || paths.length === 0) return null;
+  return (
+    <div className="proof-grid">
+      {urls.map(u => (
+        <a key={u.path} href={u.url} target="_blank" rel="noopener noreferrer" className="proof-thumb" title="Open full size">
+          <img src={u.url} alt="proof of work" loading="lazy" />
+        </a>
+      ))}
+      {urls.length < paths.length && <div className="proof-thumb loadingthumb"><span className="spin"><RefreshCw size={16} /></span></div>}
     </div>
   );
 }
@@ -1323,7 +1457,7 @@ function WorkerHome() {
   });
 
   const myTasks = jobs.filter(j => j.claimedBy === user.id).sort((a, b) => (a.scheduledTime || 0) - (b.scheduledTime || 0));
-  const active = myTasks.filter(j => j.status === "claimed");
+  const active = myTasks.filter(j => j.status === "claimed" || j.status === "submitted");
   const finished = myTasks.filter(j => j.status === "completed");
 
   const xp = user.xp || 0, lvl = levelFor(xp), into = xp % 250, pct = (into / 250) * 100;
@@ -1915,30 +2049,44 @@ function App() {
     const { error } = await dbUpdateJob(id, { steps });
     if (error) toast("Couldn't save your steps.", "error");
   }
-  async function completeJob(id) {
+  // Worker submits finished work (with photos) for the client to review.
+  async function submitJob(id, images) {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return false;
+    const submittedAt = Date.now();
+    const patch = { status: "submitted", proofImages: images || [], submittedAt, reviewNote: "" };
+    setJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
+    const { error } = await dbUpdateJob(id, patch);
+    if (error) { toast("Couldn't submit — try again.", "error"); reloadJobs(); return false; }
+    celebrate(false);
+    toast("Submitted for review! The client will take a look. 📸", "success");
+    setView("tasks");
+    return true;
+  }
+  // Client approves the work → quest completes → the worker is credited
+  // server-side by the approval trigger in schema.sql (the client can't write
+  // the worker's profile directly, so the database does it on completion).
+  async function approveJob(id) {
     const job = jobs.find(j => j.id === id);
     if (!job) return;
     const completedAt = Date.now();
-    setJobs(prev => prev.map(j => (j.id === id ? { ...j, status: "completed", completedAt } : j)));
-    const { error } = await dbUpdateJob(id, { status: "completed", completedAt });
-    if (error) { toast("Couldn't mark it complete — try again.", "error"); reloadJobs(); return; }
-    // worker progress — absolute values so a retry can never double-count
-    const gain = 50 + Math.round(job.payout);
-    const xp = (user.xp || 0) + gain;
-    const oldLvl = levelFor(user.xp || 0), newLvl = levelFor(xp);
-    const today = todayStr(Date.now());
-    const yesterday = todayStr(Date.now() - DAY);
-    let streak = user.streak || 0;
-    if (user.lastDone === today) { /* already counted today */ }
-    else if (user.lastDone === yesterday) streak += 1;
-    else streak = 1;
-    updateUser({
-      xp, level: newLvl, streak, lastDone: today,
-      completedCount: (user.completedCount || 0) + 1,
-      totalEarned: (user.totalEarned || 0) + job.payout,
-    });
-    if (newLvl > oldLvl) { celebrate(true); toast(`Level up! You're level ${newLvl} 🚀`, "level"); }
-    else { celebrate(false); toast(`Quest complete — +${gain} XP, ${money(job.payout)} earned!`, "success"); }
+    const patch = { status: "completed", completedAt };
+    setJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
+    const { error } = await dbUpdateJob(id, patch);
+    if (error) { toast("Couldn't approve — try again.", "error"); reloadJobs(); return; }
+    celebrate(true);
+    toast(`Approved! ${money(job.payout)} released to ${job.claimedByName || "your quester"}. 🎉`, "success");
+  }
+  // Client sends the work back with notes; quest returns to the worker.
+  async function requestChanges(id, noteText) {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    const patch = { status: "claimed", reviewNote: (noteText || "").trim() };
+    setJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
+    const { error } = await dbUpdateJob(id, patch);
+    if (error) { toast("Couldn't send it back — try again.", "error"); reloadJobs(); return; }
+    play("toggle");
+    toast("Sent back with your notes.", "info");
   }
   function refreshJobs() { (async () => { await reloadJobs(); toast("Board refreshed.", "info"); })(); }
 
@@ -1989,9 +2137,35 @@ function App() {
     applyTheme(user && user.settings ? user.settings.themeColor : null);
   }, [user && user.settings ? user.settings.themeColor : null]);
 
+  // Live notifications: toast on quest status transitions, and refresh the
+  // worker's stats when their submitted work is approved (credited server-side).
+  const prevJobsRef = useRef(null);
+  useEffect(() => {
+    const prev = prevJobsRef.current;
+    prevJobsRef.current = jobs;
+    if (!prev || !user) return;
+    const byId = new Map(prev.map(j => [j.id, j]));
+    jobs.forEach(j => {
+      const p = byId.get(j.id);
+      if (!p || p.status === j.status) return;
+      if (j.claimedBy === user.id && j.status === "completed" && p.status !== "completed") {
+        refreshProfile(); celebrate(true);
+        toast(`Your work on “${j.title}” was approved! 🎉`, "success");
+      } else if (j.claimedBy === user.id && j.status === "claimed" && p.status === "submitted") {
+        toast(`“${j.title}” needs a few changes — check your tasks.`, "info");
+      } else if (j.postedBy === user.id && j.status === "submitted" && p.status !== "submitted") {
+        toast(`“${j.title}” was submitted — ready for your review.`, "info");
+      } else if (j.postedBy === user.id && j.status === "claimed" && p.status === "open") {
+        toast(`${j.claimedByName || "Someone"} claimed “${j.title}”.`, "info");
+      }
+    });
+    /* eslint-disable-next-line */
+  }, [jobs]);
+
   const value = {
     user, jobs, view, setView, now, ui, setUi,
-    signup, login, demoLogin, logout, postJob, deleteJob, claimJob, setSteps, completeJob,
+    signup, login, demoLogin, logout, postJob, deleteJob, claimJob, setSteps,
+    submitJob, approveJob, requestChanges,
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
     setHomeLocation, refreshProfile, releaseJob,
   };
@@ -2312,6 +2486,25 @@ em{font-style:normal;color:var(--primary)}
 .chat-send{flex:none;width:42px;border-radius:11px;background:var(--primary);color:#fff;display:grid;place-items:center;cursor:pointer;transition:.15s}
 .chat-send:hover{filter:brightness(1.1)}
 .chat-send:active{transform:translateY(1px)}
+
+/* proof photos + review */
+.proof-up{margin-top:6px;display:flex;flex-direction:column;gap:8px}
+.proof-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+.proof-thumb{position:relative;width:84px;height:84px;border-radius:11px;overflow:hidden;border:1px solid var(--line2);background:var(--void);flex:none;display:block}
+.proof-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.proof-thumb.loadingthumb{display:grid;place-items:center;color:var(--muted)}
+.proof-rm{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(5,2,3,.78);color:#fff;display:grid;place-items:center;cursor:pointer;border:1px solid var(--line2)}
+.proof-rm:hover{background:var(--primary)}
+.proof-add{width:84px;height:84px;border-radius:11px;border:1.5px dashed var(--line2);background:var(--card2);color:var(--ink2);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;font-size:11px;font-weight:700;font-family:var(--disp);transition:.15s}
+.proof-add:hover{border-color:var(--primary);color:var(--primary)}
+.proof-add:disabled{opacity:.6;cursor:default}
+.review-box{display:flex;flex-direction:column;gap:10px;margin-top:2px}
+.review-wait{color:var(--gold)!important;background:var(--gold-l)!important;border-color:#3a2a0e!important}
+.review-strip{color:var(--cyan);background:var(--cyan-l);border-color:#0c3d49}
+.review-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.review-changes{display:flex;flex-direction:column;gap:8px}
+.review-changes textarea{resize:vertical;min-height:54px;font-family:var(--font);line-height:1.45}
+.sbadge-review{background:var(--gold-l);color:var(--gold);border:1px solid #3a2a0e}
 
 /* ===== NAV ===== */
 .nav{position:sticky;top:0;z-index:40;background:rgba(12,6,8,.78);backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
