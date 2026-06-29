@@ -68,8 +68,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -577,6 +577,11 @@ function play(name) {
 /* ---------- misc helpers ---------- */
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const money = n => "$" + Number(n || 0).toLocaleString();
+// What a quester actually takes home after the platform's commission %.
+const questerNet = (payout, pct) => {
+  const p = Math.min(100, Math.max(0, Number(pct) || 0));
+  return Math.round((Number(payout) || 0) * (1 - p / 100) * 100) / 100;
+};
 const DAY = 86400000, HOUR = 3600000, MIN = 60000;
 function fmtRemaining(ms) {
   if (ms <= 0) return "Overdue";
@@ -1287,7 +1292,7 @@ function BrowseCard({ job, distance }) {
       {job.desc && <p className="jc-desc">{job.desc}</p>}
       <div className="payout-big">{money(job.payout)}<span> flat</span></div>
       {platform.commissionPct > 0 && (
-        <div className="net-hint"><ShieldCheck size={12} strokeWidth={2.4} /> You earn {money(Math.round(job.payout * (1 - platform.commissionPct / 100)))} after the {platform.commissionPct}% platform fee</div>
+        <div className="net-hint"><ShieldCheck size={12} strokeWidth={2.4} /> You earn {money(questerNet(job.payout, platform.commissionPct))} after the {platform.commissionPct}% platform fee</div>
       )}
       <div className="jc-meta">
         {job.location && <span className="meta-i"><MapPin size={13} />{job.location}</span>}
@@ -1318,7 +1323,9 @@ function BrowseCard({ job, distance }) {
   );
 }
 function TaskCard({ job }) {
-  const { setSteps, submitJob, setFocusJob, releaseJob, toast, approveCancellation, declineCancellation } = useApp();
+  const { setSteps, submitJob, setFocusJob, releaseJob, toast, approveCancellation, declineCancellation, platform } = useApp();
+  const net = questerNet(job.payout, platform.commissionPct);
+  const hasFee = platform.commissionPct > 0;
   const [newStep, setNewStep] = useState("");
   const [giveUp, setGiveUp] = useState(false);
   const [reason, setReason] = useState("Something came up");
@@ -1385,7 +1392,7 @@ function TaskCard({ job }) {
           <StatusBadge status="submitted" />
         </div>
         <h3 className="jc-title">{job.title}</h3>
-        <div className="claim-strip review-wait"><Clock size={14} /> Submitted — waiting for <strong>{job.postedByName}</strong> to review your work and release {money(job.payout)}.</div>
+        <div className="claim-strip review-wait"><Clock size={14} /> Submitted — waiting for <strong>{job.postedByName}</strong> to review your work and release {money(net)} to you{hasFee ? ` (after the ${platform.commissionPct}% fee)` : ""}.</div>
         {cancelBanner}
         <div className="field-label" style={{ marginTop: 4 }}>Photos you submitted</div>
         <ProofGallery paths={job.proofImages} />
@@ -1401,6 +1408,9 @@ function TaskCard({ job }) {
         <span className="payout">{money(job.payout)}</span>
       </div>
       <h3 className="jc-title">{job.title}</h3>
+      {hasFee && (
+        <div className="net-hint"><ShieldCheck size={12} strokeWidth={2.4} /> You earn {money(net)} after the {platform.commissionPct}% platform fee</div>
+      )}
       <div className="sched"><Calendar size={14} /> You're doing this {fmtWhen(job.scheduledTime)} · <Countdown to={job.deadline} /></div>
       {job.releaseNote && (
         <div className="note-strip">
@@ -1602,7 +1612,7 @@ function JobChat({ job }) {
   );
 }
 function WorkerHome() {
-  const { user, jobs, view, setEnergy, refreshJobs, saveSettings, setHomeLocation, toast } = useApp();
+  const { user, jobs, view, setEnergy, refreshJobs, saveSettings, setHomeLocation, toast, platform } = useApp();
   const [cat, setCat] = useState("All");
   const [q, setQ] = useState("");
   const [addr, setAddr] = useState(user.settings?.locLabel || "");
@@ -1702,7 +1712,7 @@ function WorkerHome() {
                 <div key={j.id} className="card jobcard jobcard-completed mini-done">
                   <div className="jc-top"><span className="cat-tag">{j.category}</span><StatusBadge status="completed" /></div>
                   <h3 className="jc-title">{j.title}</h3>
-                  <div className="payout">{money(j.payout)} earned</div>
+                  <div className="payout">{money(questerNet(j.payout, platform.commissionPct))} earned</div>
                 </div>
               ))}</div>
             </>}
@@ -1786,10 +1796,12 @@ function Toggle({ on, onChange, label, hint, icon: Icon }) {
   );
 }
 function SettingsScreen() {
-  const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform } = useApp();
+  const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform, deleteAccount } = useApp();
   const s = user.settings || {};
   const [name, setName] = useState(user.name);
   const [busyPay, setBusyPay] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
   const set = patch => saveSettings(patch);
   const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
   const canNotify = ("Notification" in window) && Notification.permission === "granted";
@@ -1835,6 +1847,18 @@ function SettingsScreen() {
       await refreshProfile();
     } catch (e) { toast(e.message || "Cash out failed.", "error"); }
     setBusyPay(false);
+  }
+
+  async function doDelete() {
+    setDelBusy(true);
+    try {
+      await deleteAccount();
+      // On success the session is cleared and the app returns to the sign-in
+      // screen, so this component unmounts — nothing else to do here.
+    } catch (e) {
+      toast((e && e.message) || "Couldn't delete account — try again.", "error");
+      setDelBusy(false);
+    }
   }
 
   return (
@@ -1972,6 +1996,25 @@ function SettingsScreen() {
         </div>
       )}
 
+      <div className="card set-card danger-card">
+        <h2 className="set-h danger-h"><Trash2 size={17} /> Delete account</h2>
+        <p className="set-p">Permanently removes your account from SideQuest. This can't be undone.</p>
+        {available > 0 && (
+          <div className="del-warn"><Bell size={14} strokeWidth={2.5} /> You have {money(available)} in earnings you haven't cashed out. If you delete now, it will be lost — cash out first to keep it.</div>
+        )}
+        {!delOpen ? (
+          <Btn variant="ghostdanger" icon={Trash2} onClick={() => { setDelOpen(true); play("toggle"); }}>Delete my account</Btn>
+        ) : (
+          <div className="del-confirm">
+            <p className="del-q">Are you sure? Any active quests you posted will be canceled and refunded to you, and any work you're doing for others goes back on the board.</p>
+            <div className="del-actions">
+              <Btn variant="ghost" onClick={() => { setDelOpen(false); play("toggle"); }}>Keep my account</Btn>
+              <Btn variant="ghostdanger" icon={Trash2} onClick={doDelete} disabled={delBusy} sound="error">{delBusy ? "Deleting…" : "Permanently delete"}</Btn>
+            </div>
+          </div>
+        )}
+      </div>
+
       <Btn variant="ghostdanger" icon={LogOut} onClick={logout}>Log out</Btn>
     </div>
   );
@@ -1984,7 +2027,7 @@ function SettingsScreen() {
 function loadIdSet(key) { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); } }
 function saveIdSet(key, set) { try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) {} }
 function ProfileMenu() {
-  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode } = useApp();
+  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode, supportUnread } = useApp();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const isClient = user.type === "client";
@@ -2112,6 +2155,11 @@ function ProfileMenu() {
                 <ShieldCheck size={15} strokeWidth={2.3} /><span>Admin controls</span>
               </button>
             )}
+            <button className="pm-link" onClick={() => go("support")}>
+              <LifeBuoy size={15} strokeWidth={2.3} />
+              <span>{user.isAdmin ? "Support inbox" : "Help & support"}</span>
+              {supportUnread > 0 && <span className="pm-link-badge">{supportUnread > 9 ? "9+" : supportUnread}</span>}
+            </button>
             <button className="pm-link danger" onClick={() => { setOpen(false); logout(); }}>
               <LogOut size={15} strokeWidth={2.3} /><span>Log out</span>
             </button>
@@ -2197,13 +2245,251 @@ function ConfigScreen() {
 }
 
 /* ============================================================
+   SUPPORT — help desk: FAQ + live chat to the admin.
+   Users see FAQ + their own chat thread. Admins see an inbox of every
+   thread and can reply. Backed by the support_messages table (RLS + Realtime).
+   ============================================================ */
+const SUPPORT_FAQ = [
+  { q: "How does SideQuest work?", a: "Clients post quests — small tasks with a flat payout and a deadline. Questers browse the board, claim one that fits their energy, break it into steps, do it, and submit a photo as proof. Once the client approves, the quester gets paid." },
+  { q: "How and when do I get paid?", a: "Your earnings build up as you complete quests. Go to Earnings & payouts, connect a payout account (Stripe handles this securely), then cash out anytime. Your first payout takes about 7–14 days while Stripe verifies you; after that, deposits usually arrive within ~2 business days." },
+  { q: "Is there a fee?", a: "The platform keeps a small commission on each completed quest. You always see your exact take-home — the “You earn $X” line — on every quest before you claim it, so there are never surprises. Clients always pay the full posted amount." },
+  { q: "What if my work isn't approved?", a: "The client can send it back with notes asking for changes, and you can fix it and resubmit. If something ever feels unfair, message us right here and we'll help sort it out." },
+  { q: "What happens if a deadline passes?", a: "If a quest isn't finished by its deadline, it closes automatically and the client is refunded in full. As a quester, claim only what you're confident you can finish in time." },
+  { q: "How do I cancel a quest I posted?", a: "Open it under My Quests. If no one has claimed it yet, canceling refunds you instantly. If a quester already started, they'll be asked to approve the cancellation — in case they've already done the work." },
+  { q: "Is my payment information secure?", a: "Yes — all payments and payouts are processed by Stripe. SideQuest never sees or stores your full card or bank details." },
+  { q: "How do I delete my account?", a: "Go to Settings and scroll down to Delete account. Heads up: cash out any earnings first, because deleting is permanent." },
+];
+
+function SupportScreen() {
+  const { user } = useApp();
+  return user.isAdmin ? <AdminSupport /> : <UserSupport />;
+}
+
+function UserSupport() {
+  const { user, refreshSupportUnread, toast } = useApp();
+  const [thread, setThread] = useState([]);
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [openQ, setOpenQ] = useState(null);
+  const endRef = useRef(null);
+
+  async function markRead() {
+    try {
+      await supabase.from("support_messages").update({ read_by_user: true })
+        .eq("user_id", user.id).eq("sender", "admin").eq("read_by_user", false);
+      refreshSupportUnread();
+    } catch (e) { /* ignore */ }
+  }
+  async function load() {
+    setLoading(true);
+    const { data } = await supabase.from("support_messages").select("*")
+      .eq("user_id", user.id).order("created_at", { ascending: true });
+    setThread(data || []);
+    setLoading(false);
+    markRead();
+  }
+  useEffect(() => {
+    load();
+    const ch = supabase.channel("support-user-" + user.id)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "support_messages", filter: "user_id=eq." + user.id },
+        payload => {
+          const r = payload.new;
+          setThread(prev => prev.some(m => m.id === r.id) ? prev : [...prev, r]);
+          if (r.sender === "admin") markRead();
+        })
+      .subscribe();
+    return () => { try { supabase.removeChannel(ch); } catch (e) {} };
+    /* eslint-disable-next-line */
+  }, []);
+  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: "smooth", block: "end" }); }, [thread]);
+
+  async function send() {
+    const body = text.trim();
+    if (!body) return;
+    setText("");
+    const row = { user_id: user.id, user_email: user.email || "", user_name: user.name || "", sender: "user", body, created_at: Date.now(), read_by_admin: false, read_by_user: true };
+    const { data, error } = await supabase.from("support_messages").insert(row).select().single();
+    if (error) { toast("Message didn't send — try again.", "error"); setText(body); return; }
+    play("click");
+    if (data) setThread(prev => prev.some(m => m.id === data.id) ? prev : [...prev, data]);
+  }
+
+  return (
+    <div className="page page-narrow">
+      <header className="page-head"><h1><LifeBuoy size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Help &amp; support</h1><p>Find a quick answer below, or message us directly — we're happy to help.</p></header>
+
+      <div className="card set-card">
+        <h2 className="set-h"><HelpCircle size={17} /> Common questions</h2>
+        <div className="faq">
+          {SUPPORT_FAQ.map((item, i) => (
+            <div key={i} className={`faq-item ${openQ === i ? "open" : ""}`}>
+              <button className="faq-q" onClick={() => { setOpenQ(openQ === i ? null : i); play("toggle"); }}>
+                <span>{item.q}</span><ChevronDown size={16} strokeWidth={2.4} className="faq-chev" />
+              </button>
+              {openQ === i && <div className="faq-a">{item.a}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><MessageSquare size={17} /> Message us</h2>
+        <p className="set-p">Send a note to the SideQuest team. Replies show up right here — keep this page handy or check back anytime.</p>
+        <div className="support-chat">
+          <div className="chat-msgs support-msgs">
+            {loading && <div className="chat-empty">Loading…</div>}
+            {!loading && thread.length === 0 && <div className="chat-empty">No messages yet — ask us anything 👋</div>}
+            {thread.map(m => (
+              <div key={m.id} className={`bubble ${m.sender === "user" ? "mine" : ""}`}>
+                {m.sender === "admin" && <span className="bubble-name">SideQuest team</span>}
+                <span className="bubble-text">{m.body}</span>
+              </div>
+            ))}
+            <div ref={endRef} />
+          </div>
+          <div className="chat-input">
+            <input value={text} onChange={e => setText(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && send()} placeholder="Type your message…" maxLength={1000} />
+            <button className="chat-send" onClick={send} aria-label="Send message"><Send size={16} strokeWidth={2.4} /></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminSupport() {
+  const { refreshSupportUnread, toast } = useApp();
+  const [convos, setConvos] = useState([]);
+  const [activeUid, setActiveUid] = useState(null);
+  const [thread, setThread] = useState([]);
+  const [text, setText] = useState("");
+  const [loadingList, setLoadingList] = useState(true);
+  const endRef = useRef(null);
+  const activeRef = useRef(null);
+  useEffect(() => { activeRef.current = activeUid; }, [activeUid]);
+
+  async function loadInbox() {
+    setLoadingList(true);
+    const { data } = await supabase.from("support_messages").select("*")
+      .order("created_at", { ascending: false }).limit(800);
+    const rows = data || [];
+    const map = new Map();
+    rows.forEach(r => {
+      if (!map.has(r.user_id)) {
+        map.set(r.user_id, { userId: r.user_id, name: r.user_name || "Someone", email: r.user_email || "", last: r.body, lastAt: r.created_at, lastSender: r.sender, unread: 0 });
+      }
+      if (r.sender === "user" && !r.read_by_admin) map.get(r.user_id).unread++;
+    });
+    setConvos(Array.from(map.values()).sort((a, b) => b.lastAt - a.lastAt));
+    setLoadingList(false);
+  }
+  async function openConvo(uid, quiet) {
+    setActiveUid(uid);
+    const { data } = await supabase.from("support_messages").select("*")
+      .eq("user_id", uid).order("created_at", { ascending: true });
+    setThread(data || []);
+    try {
+      await supabase.from("support_messages").update({ read_by_admin: true })
+        .eq("user_id", uid).eq("sender", "user").eq("read_by_admin", false);
+      refreshSupportUnread();
+      if (!quiet) loadInbox();
+    } catch (e) { /* ignore */ }
+  }
+  useEffect(() => {
+    loadInbox();
+    const ch = supabase.channel("support-admin")
+      .on("postgres_changes", { event: "*", schema: "public", table: "support_messages" },
+        () => { loadInbox(); if (activeRef.current) openConvo(activeRef.current, true); })
+      .subscribe();
+    return () => { try { supabase.removeChannel(ch); } catch (e) {} };
+    /* eslint-disable-next-line */
+  }, []);
+  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: "smooth", block: "end" }); }, [thread]);
+
+  async function reply() {
+    const body = text.trim();
+    if (!body || !activeUid) return;
+    const conv = convos.find(c => c.userId === activeUid) || {};
+    setText("");
+    const row = { user_id: activeUid, user_email: conv.email || "", user_name: conv.name || "", sender: "admin", body, created_at: Date.now(), read_by_admin: true, read_by_user: false };
+    const { data, error } = await supabase.from("support_messages").insert(row).select().single();
+    if (error) { toast("Reply didn't send — try again.", "error"); setText(body); return; }
+    play("click");
+    if (data) setThread(prev => prev.some(m => m.id === data.id) ? prev : [...prev, data]);
+    loadInbox();
+  }
+
+  const active = convos.find(c => c.userId === activeUid);
+
+  return (
+    <div className="page page-narrow">
+      <header className="page-head"><h1><Inbox size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Support inbox</h1><p>Messages from your users. Tap a conversation to read and reply.</p></header>
+
+      {!activeUid && (
+        <div className="card set-card">
+          {loadingList && <div className="chat-empty">Loading…</div>}
+          {!loadingList && convos.length === 0 && <Empty icon={MessageSquare} title="No messages yet" body="When someone messages support, their conversation shows up here." />}
+          {convos.length > 0 && (
+            <div className="sup-list">
+              {convos.map(c => (
+                <button key={c.userId} className="sup-row" onClick={() => openConvo(c.userId)}>
+                  <span className="sup-ava">{(c.name || "?")[0]}</span>
+                  <span className="sup-meta">
+                    <span className="sup-name">{c.name} {c.unread > 0 && <span className="sup-dot">{c.unread}</span>}</span>
+                    <span className="sup-last">{c.lastSender === "admin" ? "You: " : ""}{c.last.length > 60 ? c.last.slice(0, 60) + "…" : c.last}</span>
+                  </span>
+                  <ChevronRight size={16} className="sup-chev" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeUid && (
+        <div className="card set-card">
+          <button className="sup-back" onClick={() => { setActiveUid(null); loadInbox(); }}>
+            <ArrowLeft size={15} strokeWidth={2.4} /> All conversations
+          </button>
+          <div className="sup-head">
+            <span className="sup-ava lg">{(active?.name || "?")[0]}</span>
+            <div><div className="sup-name">{active?.name || "User"}</div><div className="sup-email">{active?.email}</div></div>
+          </div>
+          <div className="support-chat">
+            <div className="chat-msgs support-msgs tall">
+              {thread.length === 0 && <div className="chat-empty">No messages.</div>}
+              {thread.map(m => (
+                <div key={m.id} className={`bubble ${m.sender === "admin" ? "mine" : ""}`}>
+                  {m.sender === "user" && <span className="bubble-name">{m.user_name || "User"}</span>}
+                  <span className="bubble-text">{m.body}</span>
+                </div>
+              ))}
+              <div ref={endRef} />
+            </div>
+            <div className="chat-input">
+              <input value={text} onChange={e => setText(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && reply()} placeholder="Type your reply…" maxLength={1000} />
+              <button className="chat-send" onClick={reply} aria-label="Send reply"><Send size={16} strokeWidth={2.4} /></button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
    ADMIN — platform controls (only rendered for is_admin accounts)
    ============================================================ */
 function AdminScreen() {
-  const { platform, savePlatform, toast, refreshJobs } = useApp();
+  const { platform, savePlatform, toast, refreshJobs, user, setUserAdmin, listAdmins } = useApp();
   const [f, setF] = useState(platform);
   const [busy, setBusy] = useState(false);
   const [cleaning, setCleaning] = useState(false);
+  const [admins, setAdmins] = useState([]);
+  const [grantEmail, setGrantEmail] = useState("");
+  const [granting, setGranting] = useState(false);
   useEffect(() => { setF(platform); }, [platform]);
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
   const num = (k, v) => set(k, v === "" ? "" : Number(v));
@@ -2233,6 +2519,32 @@ function AdminScreen() {
       toast((e && e.message) || "Cleanup failed.", "error");
     }
     setCleaning(false);
+  }
+
+  async function loadAdmins() {
+    try { setAdmins(await listAdmins()); } catch (e) { /* ignore */ }
+  }
+  useEffect(() => { loadAdmins(); /* eslint-disable-next-line */ }, []);
+
+  async function grant() {
+    const email = grantEmail.trim();
+    if (!email) return;
+    setGranting(true);
+    try {
+      const r = await setUserAdmin(email, true);
+      toast((r && (r.name || r.email) ? (r.name || r.email) : "They") + " is now an admin.", "success");
+      setGrantEmail("");
+      loadAdmins();
+    } catch (e) { toast((e && e.message) || "Couldn't grant admin.", "error"); }
+    setGranting(false);
+  }
+  async function revoke(a) {
+    if (!window.confirm("Remove admin access for " + (a.name || a.email) + "?")) return;
+    try {
+      await setUserAdmin(a.email, false);
+      toast("Admin access removed for " + (a.name || a.email) + ".", "success");
+      loadAdmins();
+    } catch (e) { toast((e && e.message) || "Couldn't update access.", "error"); }
   }
 
   const sample = 100;
@@ -2269,6 +2581,31 @@ function AdminScreen() {
         <label className="field"><span className="field-label">Max total accounts (0 = unlimited)</span>
           <input className="field-input" type="number" min="0" value={f.maxAccounts} onChange={e => num("maxAccounts", e.target.value)} /></label>
         <Toggle icon={User} label="Allow new signups" hint="Turn off to close registration" on={f.signupsEnabled} onChange={v => set("signupsEnabled", v)} />
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><ShieldCheck size={17} /> Admin access</h2>
+        <p className="set-p">Admins can change these platform settings and answer support. Grant access by email — the person needs a SideQuest account already.</p>
+        <div className="grant-row">
+          <input className="field-input" type="email" placeholder="person@email.com" value={grantEmail}
+            onChange={e => setGrantEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && grant()} />
+          <Btn variant="primary" icon={UserPlus} onClick={grant} disabled={granting || !grantEmail.trim()} sound="success">{granting ? "Granting…" : "Make admin"}</Btn>
+        </div>
+        <div className="admin-list">
+          {admins.length === 0 && <div className="admin-empty">No admins loaded.</div>}
+          {admins.map(a => (
+            <div key={a.id} className="admin-row">
+              <span className="admin-ava"><ShieldCheck size={13} strokeWidth={2.5} /></span>
+              <span className="admin-meta">
+                <span className="admin-name">{a.name || "—"}{a.id === user.id && <span className="admin-you">you</span>}</span>
+                <span className="admin-mail">{a.email}</span>
+              </span>
+              {a.id === user.id
+                ? <span className="admin-locked">can't remove self</span>
+                : <button className="admin-revoke" onClick={() => revoke(a)}><UserX size={14} strokeWidth={2.4} /> Remove</button>}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="card set-card">
@@ -2314,6 +2651,7 @@ function App() {
   const [focusJob, setFocusJob] = useState(null);
   const [msgNotifs, setMsgNotifs] = useState([]);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  const [supportUnread, setSupportUnread] = useState(0);
 
   const reduceMotion = useRef(false);
   useEffect(() => {
@@ -2371,6 +2709,42 @@ function App() {
     await refreshPlatform();
     toast("Platform settings saved.", "success");
     return true;
+  }
+
+  // Permanently delete the signed-in user's own account (server refunds any held
+  // money + frees their in-progress work first). Throws on error so the caller
+  // can show it; on success we clear the local session.
+  async function deleteAccount() {
+    await callFn("delete-account", {});
+    try { await supabase.auth.signOut(); } catch (e) {}
+    setUser(null); setJobs([]); setMsgNotifs([]); setView("browse"); setPhase("auth");
+  }
+
+  // Admin-only (enforced server-side): grant or revoke admin for someone by email.
+  async function setUserAdmin(email, makeAdmin) {
+    const { data, error } = await supabase.rpc("set_user_admin", { target_email: email, make_admin: makeAdmin });
+    if (error) throw new Error(error.message || "Couldn't update admin access.");
+    return data;
+  }
+  async function listAdmins() {
+    const { data, error } = await supabase.rpc("list_admins");
+    if (error) throw new Error(error.message || "Couldn't load admins.");
+    return data || [];
+  }
+
+  // Unread support badge: for an admin it's unread user messages across all
+  // threads; for a user it's unread admin replies in their own thread.
+  async function refreshSupportUnread(u) {
+    const me = u || user;
+    if (!me) return;
+    try {
+      let qy = supabase.from("support_messages").select("id", { count: "exact", head: true });
+      qy = me.isAdmin
+        ? qy.eq("sender", "user").eq("read_by_admin", false)
+        : qy.eq("user_id", me.id).eq("sender", "admin").eq("read_by_user", false);
+      const { count } = await qy;
+      setSupportUnread(count || 0);
+    } catch (e) { /* ignore */ }
   }
 
   // bootstrap: not configured -> setup screen; otherwise restore any saved session
@@ -2665,8 +3039,9 @@ function App() {
     const { error } = await dbUpdateJob(id, patch);
     if (error) { toast("Couldn't approve — try again.", "error"); reloadJobs(); return; }
     celebrate(true);
-    toast(`Approved! ${money(job.payout)} released to ${job.claimedByName || "your quester"}. 🎉`, "success");
-    sendPush(job.claimedBy, "Work approved 🎉", `“${job.title}” was approved — ${money(job.payout)} is yours.`);
+    const net = questerNet(job.payout, platform.commissionPct);
+    toast(`Approved! Payment released to ${job.claimedByName || "your quester"}. 🎉`, "success");
+    sendPush(job.claimedBy, "Work approved 🎉", `“${job.title}” was approved — ${money(net)} is yours.`);
   }
   // Client sends the work back with notes; quest returns to the worker.
   async function requestChanges(id, noteText) {
@@ -2756,6 +3131,21 @@ function App() {
     /* eslint-disable-next-line */
   }, [phase, user && user.id]);
 
+  // Support help-desk unread badge: poll + live updates.
+  useEffect(() => {
+    if (phase !== "app" || !user) return;
+    refreshSupportUnread();
+    const t = setInterval(() => refreshSupportUnread(), 60000);
+    let ch = null;
+    if (CONFIGURED && ENABLE_REALTIME) {
+      ch = supabase.channel("support-badge-" + user.id)
+        .on("postgres_changes", { event: "*", schema: "public", table: "support_messages" }, () => refreshSupportUnread())
+        .subscribe();
+    }
+    return () => { clearInterval(t); if (ch) { try { supabase.removeChannel(ch); } catch (e) {} } };
+    /* eslint-disable-next-line */
+  }, [phase, user && user.id]);
+
   // Handle returns from Stripe Checkout / Connect onboarding (query flags).
   useEffect(() => {
     if (phase !== "app") return;
@@ -2816,6 +3206,8 @@ function App() {
     msgNotifs, refreshMsgNotifs, markMsgsSeen,
     cancelJob, approveCancellation, declineCancellation,
     platform, savePlatform, refreshPlatform,
+    deleteAccount, setUserAdmin, listAdmins,
+    supportUnread, refreshSupportUnread,
   };
 
   return (
@@ -2844,6 +3236,8 @@ function App() {
             <main className="main">
               {view === "admin" && user.isAdmin ? (
                 <AdminScreen />
+              ) : view === "support" ? (
+                <SupportScreen />
               ) : (
                 <>
                   {user.type === "client" ? <ClientHome /> : <WorkerHome />}
@@ -3156,6 +3550,61 @@ em{font-style:normal;color:var(--primary)}
 .chat-send{flex:none;width:42px;border-radius:11px;background:var(--primary);color:#fff;display:grid;place-items:center;cursor:pointer;transition:.15s}
 .chat-send:hover{filter:brightness(1.1)}
 .chat-send:active{transform:translateY(1px)}
+
+/* support: FAQ accordion */
+.faq{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+.faq-item{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card2)}
+.faq-item.open{border-color:var(--line2)}
+.faq-q{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;padding:12px 14px;cursor:pointer;font-weight:700;font-size:13.5px;color:var(--ink);font-family:var(--disp)}
+.faq-q:hover{color:var(--primary)}
+.faq-chev{flex:0 0 auto;color:var(--muted);transition:transform .18s}
+.faq-item.open .faq-chev{transform:rotate(180deg);color:var(--primary)}
+.faq-a{padding:0 14px 13px;font-size:13.5px;line-height:1.5;color:var(--ink2);animation:rise .18s}
+/* support chat shell */
+.support-chat{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card);margin-top:4px}
+.support-msgs{max-height:340px}
+.support-msgs.tall{max-height:420px}
+/* admin support inbox */
+.sup-list{display:flex;flex-direction:column;gap:4px}
+.sup-row{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:10px;border-radius:12px;cursor:pointer;transition:.12s}
+.sup-row:hover{background:var(--card2)}
+.sup-ava{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--primary-l);color:var(--primary);font-weight:800;font-family:var(--disp);text-transform:uppercase}
+.sup-ava.lg{width:46px;height:46px;font-size:18px}
+.sup-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sup-name{font-weight:700;font-size:14px;color:var(--ink);font-family:var(--disp);display:flex;align-items:center;gap:7px}
+.sup-last{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sup-dot{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center}
+.sup-chev{flex:none;color:var(--muted)}
+.sup-back{display:inline-flex;align-items:center;gap:6px;background:none;border:none;color:var(--ink2);font-weight:700;font-size:13px;cursor:pointer;padding:2px 0;font-family:var(--disp)}
+.sup-back:hover{color:var(--primary)}
+.sup-head{display:flex;align-items:center;gap:11px;margin:8px 0 4px}
+.sup-email{font-size:12.5px;color:var(--muted)}
+/* admin access management */
+.grant-row{display:flex;gap:8px;align-items:stretch;margin-top:2px}
+.grant-row .field-input{flex:1}
+.admin-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.admin-empty{font-size:13px;color:var(--muted);padding:4px 2px}
+.admin-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:11px;background:var(--card2)}
+.admin-ava{flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--gold-l);color:var(--gold)}
+.admin-meta{flex:1;min-width:0;display:flex;flex-direction:column}
+.admin-name{font-weight:700;font-size:13.5px;color:var(--ink);font-family:var(--disp);display:flex;align-items:center;gap:7px}
+.admin-you{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--mint);background:var(--mint-l);padding:1px 6px;border-radius:6px}
+.admin-mail{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.admin-locked{font-size:11.5px;color:var(--muted);font-style:italic}
+.admin-revoke{display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--line2);color:var(--ink2);font-weight:700;font-size:12px;padding:5px 9px;border-radius:9px;cursor:pointer;transition:.12s;font-family:var(--disp)}
+.admin-revoke:hover{border-color:var(--accent);color:var(--accent);background:var(--primary-l)}
+/* delete account danger zone */
+.danger-card{border-color:#3a1620}
+.danger-h{color:var(--accent)}
+.danger-h svg{color:var(--accent)}
+.del-warn{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.45;color:var(--gold);background:var(--gold-l);border:1px solid #3a2a0e;border-radius:11px;padding:10px 12px;margin:4px 0;font-weight:600}
+.del-warn svg{flex:0 0 auto;margin-top:1px}
+.del-confirm{margin-top:4px;padding:12px;border:1px solid #3a1620;border-radius:12px;background:var(--primary-l);animation:rise .2s}
+.del-q{font-size:13.5px;line-height:1.5;color:var(--ink);margin-bottom:10px}
+.del-actions{display:flex;gap:8px;flex-wrap:wrap}
+/* unread badge on profile-menu links */
+.pm-link{position:relative}
+.pm-link-badge{margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center}
 
 /* proof photos + review */
 .proof-up{margin-top:6px;display:flex;flex-direction:column;gap:8px}
