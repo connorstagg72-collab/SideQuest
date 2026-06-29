@@ -171,6 +171,7 @@ function rowToJob(r) {
     refundedAt: r.refunded_at != null ? Number(r.refunded_at) : null,
     paid: !!r.paid,
     cancelRequested: !!r.cancel_requested,
+    tipAmount: Number(r.tip_amount) || 0,
   };
 }
 function rowToMsg(r) {
@@ -1117,6 +1118,46 @@ function PostQuestForm() {
     </div>
   );
 }
+function TipBox({ job }) {
+  const { sendTip } = useApp();
+  const [open, setOpen] = useState(false);
+  const [amt, setAmt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const presets = [3, 5, 10, 20];
+  async function go(v) {
+    const value = Math.round(Number(v != null ? v : amt) || 0);
+    if (!value || value <= 0) { play("error"); return; }
+    setBusy(true);
+    await sendTip(job.id, value); // redirects to Stripe on success
+    setBusy(false);
+  }
+  const who = job.claimedByName || "your quester";
+  return (
+    <div className="tip-box">
+      {job.tipAmount > 0 && (
+        <div className="tip-given"><Heart size={13} strokeWidth={2.6} /> You've tipped {money(job.tipAmount)} — thank you for being awesome.</div>
+      )}
+      {!open ? (
+        <button className="tip-open" onClick={() => { setOpen(true); play("toggle"); }}>
+          <Heart size={14} strokeWidth={2.5} /> {job.tipAmount > 0 ? "Add another tip" : `Tip ${who}`}
+        </button>
+      ) : (
+        <div className="tip-pick">
+          <div className="tip-label">Send a tip to {who} — 100% goes to them.</div>
+          <div className="tip-chips">
+            {presets.map(p => <button key={p} className="tip-chip" disabled={busy} onClick={() => go(p)}>{money(p)}</button>)}
+          </div>
+          <div className="tip-custom">
+            <span className="tip-dollar">$</span>
+            <input type="number" min="1" placeholder="Other" value={amt} onChange={e => setAmt(e.target.value)} />
+            <Btn variant="primary" size="sm" icon={Send} onClick={() => go()} disabled={busy || !amt}>{busy ? "…" : "Tip"}</Btn>
+          </div>
+          <button className="tip-cancel" onClick={() => { setOpen(false); setAmt(""); }}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
 function ClientJobCard({ job }) {
   const { deleteJob, cancelJob, approveJob, requestChanges } = useApp();
   const [reviewing, setReviewing] = useState(false);
@@ -1167,6 +1208,7 @@ function ClientJobCard({ job }) {
             <CheckCircle2 size={14} /> Completed by <strong>{job.claimedByName}</strong> · paid {money(job.payout)}
           </div>
           <ProofGallery paths={job.proofImages} />
+          {PAYMENTS_ENABLED && job.claimedBy && <TipBox job={job} />}
         </>
       )}
       {job.status === "expired" && (
@@ -1718,6 +1760,7 @@ function WorkerHome() {
                   <div className="jc-top"><span className="cat-tag">{j.category}</span><StatusBadge status="completed" /></div>
                   <h3 className="jc-title">{j.title}</h3>
                   <div className="payout">{money(questerNet(j.payout, platform.commissionPct))} earned</div>
+                  {j.tipAmount > 0 && <div className="tip-earned"><Heart size={12} strokeWidth={2.8} /> +{money(j.tipAmount)} tip</div>}
                 </div>
               ))}</div>
             </>}
@@ -1823,6 +1866,10 @@ function SettingsScreen() {
   const [delBusy, setDelBusy] = useState(false);
   const set = patch => saveSettings(patch);
   const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
+  // Mirror the server's instant-payout math (1% of the balance, min $0.50) so the
+  // worker sees the fee before they confirm. The server is the source of truth.
+  const instantFee = Math.max(0.5, Math.round(available * 0.01 * 100) / 100);
+  const instantNet = Math.max(0, Math.round((available - instantFee) * 100) / 100);
   const canNotify = ("Notification" in window) && Notification.permission === "granted";
   const notifBlocked = ("Notification" in window) && Notification.permission === "denied";
 
@@ -1856,15 +1903,31 @@ function SettingsScreen() {
     } catch (e) { toast(e.message || "Couldn't start payout setup.", "error"); }
     setBusyPay(false);
   }
-  async function cashOut() {
+  async function cashOut(instant) {
     if (!platform.payoutsEnabled) { toast("Cashouts are paused right now — check back soon.", "info"); return; }
     if (available < platform.minCashout) { toast(`You need at least ${money(platform.minCashout)} before you can cash out.`, "info"); return; }
+    if (instant) {
+      const ok = window.confirm(`Send ${money(instantNet)} to your bank now? A ${money(instantFee)} instant fee applies (most banks get it within ~30 min).`);
+      if (!ok) return;
+    }
     setBusyPay(true);
     try {
-      const r = await callFn("stripe-connect", { action: "payout" });
-      toast(`Cashed out ${money(r.amount || available)} 🎉`, "success");
+      const r = await callFn("stripe-connect", { action: "payout", instant: !!instant });
+      if (r.fellBack) toast(r.message || "Sent via standard payout instead.", "info");
+      else if (r.instant) toast(`Sent ${money(r.amount)} to your bank — arrives in ~30 min ⚡`, "success");
+      else toast(`Cashed out ${money(r.amount || available)} 🎉`, "success");
       await refreshProfile();
     } catch (e) { toast(e.message || "Cash out failed.", "error"); }
+    setBusyPay(false);
+  }
+  async function openPayoutDashboard() {
+    setBusyPay(true);
+    try {
+      const origin = window.location.origin + window.location.pathname;
+      const { url } = await callFn("stripe-connect", { action: "dashboard", returnUrl: origin + "?connect=done", refreshUrl: origin + "?connect=refresh" });
+      if (url) { window.location.href = url; return; }
+      toast("Couldn't open payout settings. Try again.", "error");
+    } catch (e) { toast(e.message || "Couldn't open payout settings.", "error"); }
     setBusyPay(false);
   }
 
@@ -1999,15 +2062,21 @@ function SettingsScreen() {
             </>
           ) : (
             <>
-              <Btn variant="success" icon={DollarSign} onClick={cashOut} disabled={busyPay || available <= 0}>
+              <Btn variant="success" icon={DollarSign} onClick={() => cashOut(false)} disabled={busyPay || available <= 0}>
                 {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
               </Btn>
+              {available > 0 && (
+                <button className="instant-btn" onClick={() => cashOut(true)} disabled={busyPay}>
+                  <span className="instant-l"><Zap size={15} strokeWidth={2.6} /> Instant cash out</span>
+                  <span className="instant-r">get {money(instantNet)} now · {money(instantFee)} fee</span>
+                </button>
+              )}
               <div className="payout-info">
-                <div className="pi-row"><Check size={13} strokeWidth={3} /> <span><strong>Cashing out is automatic.</strong> Tap the button and your earnings move to your Stripe account, which deposits to your bank on its own — nothing else to do.</span></div>
-                <div className="pi-row"><Clock size={13} /> <span><strong>When it lands:</strong> your <em>first</em> payout can take ~7–14 days while Stripe verifies you. After that, deposits usually arrive within about 2 business days.</span></div>
-                <div className="pi-row"><Bell size={13} /> <span>Exact timing is set by Stripe and your bank, so it can vary. You can track payout dates in your Stripe dashboard.</span></div>
+                <div className="pi-row"><Check size={13} strokeWidth={3} /> <span><strong>Standard (free):</strong> your earnings move to your Stripe account and deposit to your bank on their own.</span></div>
+                <div className="pi-row"><Zap size={13} /> <span><strong>Instant (small fee):</strong> goes to your debit card, usually within ~30 minutes. You'll need a debit card added in payout settings.</span></div>
+                <div className="pi-row"><Clock size={13} /> <span>Your <em>first</em> standard payout can take ~7–14 days while Stripe verifies you; after that, about 2 business days. Exact timing is set by Stripe and your bank.</span></div>
               </div>
-              <p className="auth-fine"><button className="linklike" onClick={connectPayouts}>Manage payout account</button></p>
+              <p className="auth-fine"><button className="linklike" onClick={openPayoutDashboard}>Manage payout account / add debit card</button></p>
             </>
           )}
         </div>
@@ -3549,6 +3618,25 @@ function App() {
     const res = await dbFetchJobs();
     if (!res.error) setJobs(res.jobs);
   }
+  // Tip a quester for a completed quest. Charges the client via Stripe Checkout;
+  // the webhook credits the quester on success. Returns false (redirecting away).
+  async function sendTip(jobId, amount) {
+    const amt = Math.round(Number(amount) || 0);
+    if (!amt || amt <= 0) { toast("Enter a tip above $0.", "info"); return false; }
+    if (!PAYMENTS_ENABLED) { toast("Tips need payments turned on.", "info"); return false; }
+    try {
+      const origin = window.location.origin + window.location.pathname;
+      const { url } = await callFn("stripe-checkout", {
+        tip: { jobId, amount: amt },
+        successUrl: origin + "?tip=1",
+        cancelUrl: origin + "?tipcancel=1",
+      });
+      if (url) { window.location.href = url; return false; }
+      toast("Couldn't start the tip checkout. Try again.", "error");
+      return false;
+    } catch (e) { toast(e.message || "Couldn't start the tip.", "error"); return false; }
+  }
+
   async function postJob(data) {
     // Payments on: create a Stripe Checkout session via the edge function and
     // redirect. The job is created server-side as 'pending_payment' and flips
@@ -3882,6 +3970,8 @@ function App() {
     if (p.get("canceled") === "1") { toast("Checkout canceled — quest wasn't posted.", "info"); changed = true; }
     if (p.get("connect") === "done") { toast("Payouts connected — you can cash out now.", "success"); refreshProfile(); changed = true; }
     if (p.get("connect") === "refresh") { toast("Almost there — finish your payout setup.", "info"); changed = true; }
+    if (p.get("tip") === "1") { toast("Tip sent — thanks for looking after your quester! 💛", "success"); reloadJobs(); changed = true; }
+    if (p.get("tipcancel") === "1") { toast("Tip canceled — no charge made.", "info"); changed = true; }
     if (changed) {
       try { window.history.replaceState({}, "", window.location.origin + window.location.pathname); } catch (e) {}
     }
@@ -3936,6 +4026,7 @@ function App() {
     deleteAccount, setUserAdmin, listAdmins, cityLeaderboard,
     supportUnread, refreshSupportUnread,
     adminChatUnread, refreshAdminChatUnread, adminChannelList, adminCreateGroup, adminOpenDM,
+    sendTip,
   };
 
   return (
@@ -4247,6 +4338,35 @@ em{font-style:normal;color:var(--primary)}
 .pi-row svg{flex:none;margin-top:2px;color:var(--mint)}
 .pi-row strong{color:var(--ink);font-weight:700}
 .pi-row em{color:var(--primary);font-style:normal;font-weight:700}
+
+/* instant cash-out button */
+.instant-btn{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;margin-top:9px;padding:11px 14px;border-radius:13px;background:var(--card2);border:1px solid var(--line2);cursor:pointer;transition:.14s;font-family:var(--disp)}
+.instant-btn:hover:not(:disabled){border-color:var(--mint);background:var(--primary-l)}
+.instant-btn:disabled{opacity:.55;cursor:default}
+.instant-l{display:inline-flex;align-items:center;gap:7px;font-weight:800;font-size:14px;color:var(--mint)}
+.instant-l svg{color:var(--mint)}
+.instant-r{font-size:12px;color:var(--muted);font-weight:600;text-align:right}
+
+/* tipping */
+.tip-box{margin-top:11px;border-top:1px solid var(--line);padding-top:11px}
+.tip-given{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--mint);margin-bottom:9px}
+.tip-given svg{color:var(--mint)}
+.tip-open{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:11px;background:var(--primary-l);border:1px solid var(--line2);color:var(--primary);font-weight:700;font-size:13px;cursor:pointer;transition:.14s;font-family:var(--disp)}
+.tip-open:hover{background:#34101a;border-color:var(--primary-d);color:#fff}
+.tip-open svg{color:inherit}
+.tip-pick{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 13px}
+.tip-label{font-size:12.5px;color:var(--ink2);font-weight:600;margin-bottom:9px}
+.tip-chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:9px}
+.tip-chip{padding:7px 15px;border-radius:10px;background:var(--card);border:1px solid var(--line2);color:var(--ink);font-weight:800;font-size:13.5px;cursor:pointer;transition:.12s;font-family:var(--mono)}
+.tip-chip:hover:not(:disabled){border-color:var(--primary);background:var(--primary-l);color:var(--primary)}
+.tip-chip:disabled{opacity:.55;cursor:default}
+.tip-custom{display:flex;align-items:center;gap:8px}
+.tip-custom .tip-dollar{font-family:var(--mono);font-weight:700;color:var(--muted)}
+.tip-custom input{flex:1;min-width:0;background:var(--card);border:1px solid var(--line2);border-radius:10px;padding:8px 11px;color:var(--ink);font-family:var(--mono);font-size:14px}
+.tip-cancel{margin-top:9px;background:none;border:none;color:var(--muted);font-weight:600;font-size:12.5px;cursor:pointer;padding:0;font-family:var(--disp)}
+.tip-cancel:hover{color:var(--ink2)}
+.tip-earned{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:var(--mint);margin-top:3px}
+.tip-earned svg{color:var(--mint)}
 
 /* appearance swatches */
 .swatches{display:flex;flex-wrap:wrap;gap:10px;margin:4px 0 6px}
