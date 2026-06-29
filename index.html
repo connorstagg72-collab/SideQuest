@@ -140,6 +140,7 @@ function rowToProfile(r) {
     totalEarned: Number(r.total_earned) || 0,
     homeLat: r.home_lat != null ? Number(r.home_lat) : null,
     homeLng: r.home_lng != null ? Number(r.home_lng) : null,
+    city: r.city || "",
     stripeAccountId: r.stripe_account_id || null,
     payoutsEnabled: !!r.payouts_enabled,
     paidOut: Number(r.paid_out) || 0,
@@ -191,6 +192,7 @@ function profilePatchToRow(p) {
   if ("totalEarned" in p) r.total_earned = p.totalEarned;
   if ("homeLat" in p) r.home_lat = p.homeLat;
   if ("homeLng" in p) r.home_lng = p.homeLng;
+  if ("city" in p) r.city = p.city;
   return r;
 }
 const DEFAULT_PLATFORM = {
@@ -333,27 +335,31 @@ async function dbUpdateProfile(id, appPatch) {
 /* ---------- location helpers ---------- */
 // Free geocoding via OpenStreetMap Nominatim. Fine for low volume; for heavy
 // use, swap in a paid geocoder or move this into an edge function.
+function pickCity(a) {
+  if (!a) return "";
+  return (a.city || a.town || a.village || a.municipality || a.hamlet || a.suburb || a.county || "").trim();
+}
 async function geocodeAddress(q) {
   if (!q || !q.trim()) return null;
   try {
     const res = await fetch(
-      "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=0&q=" +
+      "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=" +
         encodeURIComponent(q.trim()),
       { headers: { Accept: "application/json" } }
     );
     const arr = await res.json();
-    if (arr && arr[0]) return { lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon), label: arr[0].display_name };
+    if (arr && arr[0]) return { lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon), label: arr[0].display_name, city: pickCity(arr[0].address) };
   } catch (e) { console.error("geocode", e); }
   return null;
 }
 async function reverseGeocode(lat, lng) {
   try {
     const res = await fetch(
-      "https://nominatim.openstreetmap.org/reverse?format=json&zoom=14&lat=" + lat + "&lon=" + lng,
+      "https://nominatim.openstreetmap.org/reverse?format=json&zoom=14&addressdetails=1&lat=" + lat + "&lon=" + lng,
       { headers: { Accept: "application/json" } }
     );
     const j = await res.json();
-    if (j && j.display_name) return j.display_name;
+    if (j && j.display_name) return { label: j.display_name, city: pickCity(j.address) };
   } catch (e) {}
   return null;
 }
@@ -1024,8 +1030,8 @@ function PostQuestForm() {
     const p = await getCurrentPosition();
     if (!p) { setLocBusy(false); toast("Couldn't get your location — type an address instead.", "info"); return; }
     setCoords({ lat: p.lat, lng: p.lng });
-    const label = await reverseGeocode(p.lat, p.lng);
-    setLoc(label || `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`);
+    const r = await reverseGeocode(p.lat, p.lng);
+    setLoc((r && r.label) || `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`);
     setLocBusy(false);
   }
 
@@ -1636,7 +1642,7 @@ function WorkerHome() {
     const g = await geocodeAddress(addr);
     setLocBusy(false);
     if (!g) { toast("Couldn't find that address — try being more specific.", "info"); return; }
-    setHomeLocation(g.lat, g.lng);
+    setHomeLocation(g.lat, g.lng, g.city);
     saveSettings({ locLabel: addr.trim() });
     toast("Location set — sorting by distance.", "success");
   }
@@ -1644,9 +1650,9 @@ function WorkerHome() {
     setLocBusy(true);
     const p = await getCurrentPosition();
     if (!p) { setLocBusy(false); toast("Couldn't get your location — type an address instead.", "info"); return; }
-    setHomeLocation(p.lat, p.lng);
-    const label = await reverseGeocode(p.lat, p.lng);
-    const shown = label || `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`;
+    const r = await reverseGeocode(p.lat, p.lng);
+    setHomeLocation(p.lat, p.lng, r && r.city);
+    const shown = (r && r.label) || `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`;
     setLocBusy(false);
     setAddr(shown);
     saveSettings({ locLabel: shown });
@@ -1707,6 +1713,7 @@ function WorkerHome() {
           </div>
         </div>
         <div className="rewards-grid">{rewards.map((r, i) => <RewardCard key={i} {...r} />)}</div>
+        <CityScoreboard />
         <PayoutHint />
       </div>
     );
@@ -2269,6 +2276,133 @@ function ConfigScreen() {
         </button>
         <p className="auth-fine">The anon key is safe to ship in the browser — your data is guarded by the Row Level Security rules in schema.sql.</p>
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   CITY SCOREBOARD — top earners in the quester's city, with fun awards.
+   Backed by the city_leaderboard() RPC (safe: names + stats only).
+   ============================================================ */
+const PODIUM_TITLES = ["City Legend", "Quest Master", "Rising Hero"];
+const PODIUM_MEDAL = ["🥇", "🥈", "🥉"];
+
+function CityScoreboard() {
+  const { user, cityLeaderboard, setHomeLocation } = useApp();
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setRows(null); setErr("");
+      let city = user.city;
+      // Backfill city for users who set their location before this feature.
+      if (!city && user.homeLat != null && user.homeLng != null) {
+        try {
+          const r = await reverseGeocode(user.homeLat, user.homeLng);
+          if (r && r.city) {
+            city = r.city;
+            await supabase.from("profiles").update({ city }).eq("id", user.id);
+            if (!cancel) setHomeLocation(user.homeLat, user.homeLng, city);
+          }
+        } catch (e) { /* ignore */ }
+      }
+      try { const data = await cityLeaderboard(); if (!cancel) setRows(data); }
+      catch (e) { if (!cancel) { setErr((e && e.message) || "Couldn't load the scoreboard."); setRows([]); } }
+    })();
+    return () => { cancel = true; };
+    /* eslint-disable-next-line */
+  }, []);
+
+  if (user.homeLat == null && !user.city) {
+    return (
+      <div className="card score-card">
+        <h2 className="sub-h"><Trophy size={18} /> City scoreboard</h2>
+        <Empty icon={MapPin} title="Set your location" body="Add your area on the Browse tab to see how you stack up against earners in your city." />
+      </div>
+    );
+  }
+  if (rows === null) {
+    return (
+      <div className="card score-card">
+        <h2 className="sub-h"><Trophy size={18} /> City scoreboard</h2>
+        <div className="score-loading">Loading your city's leaderboard…</div>
+      </div>
+    );
+  }
+
+  const cityName = user.city || "your city";
+  const earners = rows.filter(r => Number(r.total_earned) > 0);
+  const podium = earners.slice(0, 3);
+  const rest = earners.slice(3);
+  const myRank = rows.findIndex(r => r.is_me);
+  const me = myRank >= 0 ? rows[myRank] : null;
+
+  const topBy = pick => { let best = null; rows.forEach(r => { const v = Number(pick(r)) || 0; if (v > 0 && (!best || v > (Number(pick(best)) || 0))) best = r; }); return best; };
+  const awards = [
+    { title: "The Machine", sub: "Most quests completed", icon: Rocket, cls: "aw-mach", win: topBy(r => r.completed_count), fmt: r => r.completed_count + " quest" + (r.completed_count === 1 ? "" : "s") },
+    { title: "Streak Lord", sub: "Longest active streak", icon: Flame, cls: "aw-streak", win: topBy(r => r.streak), fmt: r => r.streak + "-day streak" },
+    { title: "XP Overlord", sub: "Highest level reached", icon: Star, cls: "aw-xp", win: topBy(r => r.level), fmt: r => "Level " + r.level },
+  ].filter(a => a.win);
+
+  return (
+    <div className="card score-card">
+      <div className="score-head">
+        <h2 className="sub-h" style={{ margin: 0 }}><Trophy size={18} /> {cityName} scoreboard</h2>
+        <span className="score-sub">Top earners near you</span>
+      </div>
+
+      {podium.length === 0 ? (
+        <Empty icon={DollarSign} title="No earnings yet" body={`Be the first to top the board in ${cityName} — finish a quest to claim the crown.`} />
+      ) : (
+        <>
+          <div className="podium">
+            {podium.map((r, i) => (
+              <div key={r.id} className={`pod pod-${i + 1} ${r.is_me ? "me" : ""}`}>
+                <div className="pod-medal">{PODIUM_MEDAL[i]}</div>
+                <div className="pod-title">{PODIUM_TITLES[i]}</div>
+                <div className="pod-name">{r.is_me ? "You" : (r.name || "Quester")}</div>
+                <div className="pod-earn">{money(r.total_earned)}</div>
+              </div>
+            ))}
+          </div>
+
+          {rest.length > 0 && (
+            <div className="score-list">
+              {rest.map((r, i) => (
+                <div key={r.id} className={`score-row ${r.is_me ? "me" : ""}`}>
+                  <span className="score-rank">{i + 4}</span>
+                  <span className="score-name">{r.is_me ? "You" : (r.name || "Quester")}</span>
+                  <span className="score-earn">{money(r.total_earned)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {me && myRank > 2 && (
+            <div className="score-you"><Sparkles size={14} strokeWidth={2.4} /> You're #{myRank + 1} in {cityName} with {money(me.total_earned)} earned. Keep questing!</div>
+          )}
+
+          {awards.length > 0 && (
+            <>
+              <h3 className="score-aw-h">Hall of fame</h3>
+              <div className="score-awards">
+                {awards.map((a, i) => {
+                  const Ic = a.icon;
+                  return (
+                    <div key={i} className={`aw ${a.cls} ${a.win.is_me ? "me" : ""}`}>
+                      <span className="aw-ic"><Ic size={16} strokeWidth={2.5} /></span>
+                      <div className="aw-meta"><div className="aw-title">{a.title}</div><div className="aw-sub">{a.sub}</div></div>
+                      <div className="aw-win"><div className="aw-who">{a.win.is_me ? "You" : (a.win.name || "Quester")}</div><div className="aw-stat">{a.fmt(a.win)}</div></div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -2985,6 +3119,13 @@ function App() {
     return data || [];
   }
 
+  // City scoreboard: top earners in the caller's city (empty if no city set).
+  async function cityLeaderboard() {
+    const { data, error } = await supabase.rpc("city_leaderboard", { max_rows: 100 });
+    if (error) throw new Error(error.message || "Couldn't load the scoreboard.");
+    return data || [];
+  }
+
   // Unread support badge: for an admin it's unread user messages across all
   // threads; for a user it's unread admin replies in their own thread.
   async function refreshSupportUnread(u) {
@@ -3331,8 +3472,10 @@ function App() {
     setView("browse");
   }
 
-  function setHomeLocation(lat, lng) {
-    updateUser({ homeLat: lat, homeLng: lng });
+  function setHomeLocation(lat, lng, city) {
+    const patch = { homeLat: lat, homeLng: lng };
+    if (city && city.trim()) patch.city = city.trim();
+    updateUser(patch);
   }
   async function refreshProfile() {
     if (!user) return;
@@ -3507,7 +3650,7 @@ function App() {
     msgNotifs, refreshMsgNotifs, markMsgsSeen,
     cancelJob, approveCancellation, declineCancellation,
     platform, savePlatform, refreshPlatform,
-    deleteAccount, setUserAdmin, listAdmins,
+    deleteAccount, setUserAdmin, listAdmins, cityLeaderboard,
     supportUnread, refreshSupportUnread,
   };
 
@@ -3974,7 +4117,20 @@ em{font-style:normal;color:var(--primary)}
 .kb-tip{font-size:11.5px;color:var(--muted);line-height:1.45}
 @media (max-width:560px){
   .kb{grid-template-columns:1fr;gap:10px}
-  .hour-label{flex-basis:46px}
+  .cal-card,.day-card,.kb-card{padding:14px}
+  .cal-grid{gap:3px}
+  .cal-cell{min-width:0;font-size:12.5px;border-radius:8px}
+  .cal-wd-c{font-size:10px}
+  .cal-title{font-size:15px}
+  .cal-nav{width:32px;height:32px}
+  .cal-dot{bottom:4px;width:4px;height:4px}
+  .hours{max-height:360px}
+  .hour-row{gap:8px;padding:5px 7px}
+  .hour-label{flex-basis:44px;font-size:11px}
+  .tl-item{padding:7px 8px;gap:8px}
+  .tl-time{font-size:11px}
+  .urgent-sec{padding:11px}
+  .urgent-h{font-size:15px}
 }
 
 /* ===== browse: urgently need covered ===== */
@@ -3988,6 +4144,57 @@ em{font-style:normal;color:var(--primary)}
 .browse-urgent{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 6px 22px -12px rgba(245,180,40,.5)}
 .urgent-ribbon{display:flex;align-items:center;gap:6px;margin:-2px 0 8px;font-size:11.5px;font-weight:800;font-family:var(--disp);color:var(--gold);text-transform:uppercase;letter-spacing:.03em}
 .urgent-ribbon svg{flex:0 0 auto}
+
+/* ===== city scoreboard ===== */
+.score-card{display:flex;flex-direction:column;gap:12px}
+.score-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.score-sub{font-size:12px;color:var(--muted);font-weight:600}
+.score-loading{font-size:13.5px;color:var(--muted);padding:8px 2px}
+.podium{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-items:end}
+.pod{display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;padding:13px 8px;border-radius:14px;border:1px solid var(--line2);background:var(--card2);min-width:0}
+.pod-1{background:linear-gradient(180deg,rgba(245,190,40,.18),var(--card2));border-color:var(--gold);padding-top:18px}
+.pod-2{background:linear-gradient(180deg,rgba(200,205,215,.14),var(--card2));border-color:#9aa3b2}
+.pod-3{background:linear-gradient(180deg,rgba(205,127,50,.16),var(--card2));border-color:#b9763a}
+.pod.me{box-shadow:0 0 0 2px var(--primary)}
+.pod-medal{font-size:26px;line-height:1}
+.pod-1 .pod-medal{font-size:32px}
+.pod-title{font-family:var(--disp);font-weight:800;font-size:11.5px;letter-spacing:.01em}
+.pod-1 .pod-title{color:var(--gold)}
+.pod-2 .pod-title{color:#c4ccd8}
+.pod-3 .pod-title{color:#d98f52}
+.pod-name{font-size:13px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.pod-earn{font-family:var(--mono,var(--disp));font-weight:800;font-size:14px;color:var(--mint)}
+.score-list{display:flex;flex-direction:column;gap:4px;margin-top:2px}
+.score-row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;background:var(--card2);border:1px solid var(--line)}
+.score-row.me{border-color:var(--primary);background:var(--primary-l)}
+.score-rank{flex:0 0 auto;width:24px;text-align:center;font-family:var(--disp);font-weight:800;font-size:13px;color:var(--muted)}
+.score-name{flex:1;min-width:0;font-weight:700;font-size:13.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.score-earn{flex:0 0 auto;font-family:var(--mono,var(--disp));font-weight:800;font-size:13.5px;color:var(--mint)}
+.score-you{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink2);background:var(--primary-l);border:1px solid var(--line2);border-radius:11px;padding:10px 12px}
+.score-you svg{flex:0 0 auto;color:var(--gold)}
+.score-aw-h{font-family:var(--disp);font-weight:800;font-size:13px;color:var(--ink2);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
+.score-awards{display:flex;flex-direction:column;gap:7px}
+.aw{display:flex;align-items:center;gap:11px;padding:11px;border-radius:13px;background:var(--card2);border:1px solid var(--line2)}
+.aw.me{box-shadow:0 0 0 1px var(--primary)}
+.aw-ic{flex:0 0 auto;width:34px;height:34px;border-radius:10px;display:grid;place-items:center}
+.aw-mach .aw-ic{background:var(--cyan-l);color:var(--cyan)}
+.aw-streak .aw-ic{background:var(--gold-l);color:var(--gold)}
+.aw-xp .aw-ic{background:var(--primary-l);color:var(--primary)}
+.aw-meta{flex:1;min-width:0}
+.aw-title{font-family:var(--disp);font-weight:800;font-size:13.5px;color:var(--ink)}
+.aw-sub{font-size:11.5px;color:var(--muted)}
+.aw-win{flex:0 0 auto;text-align:right;min-width:0}
+.aw-who{font-weight:700;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.aw-stat{font-size:11px;color:var(--ink2)}
+@media (max-width:560px){
+  .pod{padding:10px 5px}
+  .pod-medal{font-size:22px}
+  .pod-1 .pod-medal{font-size:27px}
+  .pod-title{font-size:10px}
+  .pod-name{font-size:11.5px}
+  .pod-earn{font-size:12.5px}
+  .aw-who{max-width:84px}
+}
 
 /* proof photos + review */
 .proof-up{margin-top:6px;display:flex;flex-direction:column;gap:8px}
@@ -4062,7 +4269,7 @@ em{font-style:normal;color:var(--primary)}
 .pm-link.danger:hover svg{color:var(--accent)}
 
 /* ===== PAGE ===== */
-.main{max-width:1160px;margin:0 auto;padding:clamp(20px,3vw,38px) clamp(16px,3vw,28px) 80px;position:relative;z-index:2}
+.main{max-width:1160px;margin:0 auto;padding:clamp(20px,3vw,38px) clamp(16px,3vw,28px) 80px;position:relative;z-index:2;overflow-x:clip}
 .page{display:flex;flex-direction:column;gap:20px;animation:rise .5s cubic-bezier(.2,1,.3,1)}
 .page-narrow{max-width:600px}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
