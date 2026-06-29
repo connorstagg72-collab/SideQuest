@@ -37,6 +37,7 @@ self.addEventListener("push", (e) => {
     data: { url: d.url || "/" },
   };
   e.waitUntil((async () => {
+    if (d.test) { await self.registration.showNotification(title, opts); return; }
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     if (wins.length > 0) return;   // app is open somewhere → let the page notify
     await self.registration.showNotification(title, opts);
