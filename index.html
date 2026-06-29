@@ -475,6 +475,26 @@ async function sendPush(toUserId, title, body) {
   if (!toUserId || !PUSH_PUBLIC_KEY) return;
   try { await callFn("send-push", { to: toUserId, title, body }); } catch (e) { /* best-effort */ }
 }
+// Real end-to-end test: registers this device, then pushes to ALL of your own
+// devices through the server (so it lands on your other phone too). Returns a
+// result so the UI can tell you exactly what happened.
+async function sendTestPush() {
+  try {
+    if (!PUSH_PUBLIC_KEY) return { ok: false, error: "Push isn't configured (no key)." };
+    await subscribeToPush();
+    const { data } = await supabase.auth.getUser();
+    const uid = data && data.user && data.user.id;
+    if (!uid) return { ok: false, error: "You're not signed in." };
+    const res = await callFn("send-push", {
+      to: uid, test: true,
+      title: "SideQuest test push 🔔",
+      body: "It works! You'll see this on every device where notifications are on.",
+    });
+    return { ok: true, sent: (res && typeof res.sent === "number") ? res.sent : 0 };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
+}
 
 /* ---------- synthesized sound (Web Audio) ---------- */
 let AC = null;
@@ -1747,7 +1767,13 @@ function SettingsScreen() {
         <Toggle icon={Bell} label="Notifications on this device" hint="Claims, submissions, approvals, change requests & messages"
           on={!!s.push && canNotify} onChange={toggleDevicePush} />
         {!!s.push && canNotify && (
-          <Btn variant="soft" size="sm" icon={Bell} onClick={() => deviceNotify("Test notification 🔔", "This is how your alerts will look.", { force: true })}>Send a test</Btn>
+          <Btn variant="soft" size="sm" icon={Bell} onClick={async () => {
+            toast("Sending a test push…", "info");
+            const r = await sendTestPush();
+            if (!r.ok) { toast("Test push failed: " + r.error, "error"); return; }
+            if (r.sent > 0) toast(`Sent to ${r.sent} device${r.sent > 1 ? "s" : ""}. Check your other phone! 📲`, "success");
+            else toast("Registered this phone, but no devices to send to yet. Turn notifications on (and reopen the app) on your other phone, then try again.", "info");
+          }}>Send a test push</Btn>
         )}
         {notifBlocked && <p className="auth-fine">Notifications are blocked for this site in your browser — you'll need to allow them in site settings first.</p>}
       </div>
