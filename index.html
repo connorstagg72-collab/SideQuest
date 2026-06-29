@@ -68,8 +68,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -164,6 +164,8 @@ function rowToJob(r) {
     proofImages: Array.isArray(r.proof_images) ? r.proof_images : [],
     reviewNote: r.review_note || "",
     submittedAt: r.submitted_at != null ? Number(r.submitted_at) : null,
+    refundedAt: r.refunded_at != null ? Number(r.refunded_at) : null,
+    paid: !!r.paid,
   };
 }
 function rowToMsg(r) {
@@ -475,9 +477,10 @@ async function sendPush(toUserId, title, body) {
   if (!toUserId || !PUSH_PUBLIC_KEY) return;
   try { await callFn("send-push", { to: toUserId, title, body }); } catch (e) { /* best-effort */ }
 }
-// Real end-to-end test: registers this device, then pushes to ALL of your own
-// devices through the server (so it lands on your other phone too). Returns a
-// result so the UI can tell you exactly what happened.
+// Ask the server to refund any of MY quests that passed their deadline unfinished.
+async function checkExpiredRefunds() {
+  try { return await callFn("refund-expired", {}); } catch (e) { return null; }
+}
 async function sendTestPush() {
   try {
     if (!PUSH_PUBLIC_KEY) return { ok: false, error: "Push isn't configured (no key)." };
@@ -651,9 +654,9 @@ function Bar({ value, tone = "primary", height = 10 }) {
   return <div className="bar" style={{ height }}><div className={`bar-fill bar-${tone}`} style={{ width: Math.max(0, Math.min(100, value)) + "%" }} /></div>;
 }
 function StatusBadge({ status }) {
-  const map = { open: ["Open", "open"], claimed: ["Claimed", "claimed"], submitted: ["In review", "review"], completed: ["Done", "done"] };
+  const map = { open: ["Open", "open"], claimed: ["Claimed", "claimed"], submitted: ["In review", "review"], completed: ["Done", "done"], expired: ["Refunded", "refunded"] };
   const [t, c] = map[status] || ["", ""];
-  return <span className={`sbadge sbadge-${c}`}>{status === "completed" && <Check size={12} strokeWidth={3} />}{t}</span>;
+  return <span className={`sbadge sbadge-${c}`}>{status === "completed" && <Check size={12} strokeWidth={3} />}{status === "expired" && <ShieldCheck size={12} strokeWidth={2.6} />}{t}</span>;
 }
 function Countdown({ to, size = 14 }) {
   const { now } = useApp();
@@ -937,6 +940,16 @@ function AuthScreen() {
 /* ============================================================
    CLIENT — post a quest + my quests
    ============================================================ */
+function RefundNote({ compact }) {
+  return (
+    <div className={"refund-note" + (compact ? " refund-note-sm" : "")}>
+      <ShieldCheck size={compact ? 14 : 16} strokeWidth={2.4} />
+      <span>{compact
+        ? <span><strong>Auto-refunded in full</strong> if it isn't completed by the deadline.</span>
+        : <span><strong>Deadline guarantee:</strong> if your quest isn't completed by its deadline, you're <strong>automatically refunded in full</strong> — no action needed.</span>}</span>
+    </div>
+  );
+}
 function PostQuestForm() {
   const { user, postJob, toast } = useApp();
   const [title, setTitle] = useState("");
@@ -1045,11 +1058,13 @@ function PostQuestForm() {
         <Field label="Done by (deadline)" type="datetime-local" value={deadline} min={toLocalInput(Date.now())} onChange={e => setDeadline(e.target.value)} />
       </div>
 
+      {PAYMENTS_ENABLED && <RefundNote />}
+
       {err && <div className="auth-err"><X size={14} strokeWidth={3} />{err}</div>}
       <Btn full size="lg" icon={Rocket} onClick={submit} disabled={busy || locBusy} sound="claim">
         {busy ? "Starting checkout…" : PAYMENTS_ENABLED ? `Pay ${money(totalCharge)} & post quest` : "Post quest to the board"}
       </Btn>
-      {PAYMENTS_ENABLED && <p className="pay-note">Secure Stripe checkout — you're charged when you post, and the quest goes live the moment payment clears. Your quester earns this full payout for completing it, and cashes out to their own bank through Stripe.</p>}
+      {PAYMENTS_ENABLED && <p className="pay-note">Secure Stripe checkout — you're charged when you post, and the quest goes live the moment payment clears. Your quester earns this full payout for completing it. If it isn't completed by the deadline, you're refunded in full automatically.</p>}
     </div>
   );
 }
@@ -1071,6 +1086,7 @@ function ClientJobCard({ job }) {
         <span className="meta-i"><Calendar size={13} />by {fmtWhen(job.deadline)}</span>
         <Countdown to={job.deadline} />
       </div>
+      {PAYMENTS_ENABLED && (job.status === "open" || job.status === "claimed") && <RefundNote compact />}
       {job.status === "claimed" && (
         <div className="claim-strip">
           <User size={14} /> <strong>{job.claimedByName}</strong> claimed it · doing it {fmtWhen(job.scheduledTime)}
@@ -1103,6 +1119,11 @@ function ClientJobCard({ job }) {
           </div>
           <ProofGallery paths={job.proofImages} />
         </>
+      )}
+      {job.status === "expired" && (
+        <div className="claim-strip refund-strip">
+          <ShieldCheck size={14} /> Deadline passed without completion — {job.refundedAt ? `refunded ${money(job.payout)} to your card.` : `your ${money(job.payout)} refund is on its way to your card.`}
+        </div>
       )}
       {(job.status === "claimed" || job.status === "submitted" || job.status === "completed") && <JobChat job={job} />}
       {job.status === "open" && job.releaseNote && (
@@ -1534,7 +1555,7 @@ function WorkerHome() {
     toast("Location set — sorting by distance.", "success");
   }
 
-  const open = jobs.filter(j => j.status === "open");
+  const open = jobs.filter(j => j.status === "open" && j.deadline > Date.now());
   const decorated = open.map(j => ({
     job: j,
     mi: (myLoc && j.lat != null) ? milesBetween(myLoc, { lat: j.lat, lng: j.lng }) : null,
@@ -2178,6 +2199,22 @@ function App() {
     /* eslint-disable-next-line */
   }, [phase]);
 
+  // Deadline guarantee: when the app opens (and every few minutes while it's
+  // open), refund any of this user's quests that passed their deadline unfinished.
+  // The server marks them 'expired' and Stripe refunds the client.
+  useEffect(() => {
+    if (!CONFIGURED || phase !== "app" || !user || !PAYMENTS_ENABLED) return;
+    let stop = false;
+    const run = async () => {
+      const r = await checkExpiredRefunds();
+      if (!stop && r && r.refunded > 0) reloadJobs();
+    };
+    run();
+    const t = setInterval(run, 5 * 60 * 1000);
+    return () => { stop = true; clearInterval(t); };
+    /* eslint-disable-next-line */
+  }, [phase, user && user.id]);
+
   /* ---- auth actions (Supabase Auth) ---- */
   async function signup({ name, email, password, type }) {
     const { data, error } = await supabase.auth.signUp({
@@ -2325,6 +2362,7 @@ function App() {
   async function claimJob(id, scheduledTime) {
     const job = jobs.find(j => j.id === id);
     if (!job) return;
+    if (job.deadline <= Date.now()) { toast("That quest's deadline just passed — it'll be refunded to the client.", "info"); reloadJobs(); return; }
     const patch = {
       status: "claimed", claimedBy: user.id, claimedByName: user.name,
       scheduledTime, steps: stepsFor(job.category),
@@ -2502,6 +2540,10 @@ function App() {
         toast(`${j.claimedByName || "Someone"} claimed “${j.title}”.`, "info");
       } else if (j.postedBy === user.id && j.status === "open" && p.status === "claimed") {
         toast(`“${j.title}” came back — your quester couldn't finish it.`, "info");
+      } else if (j.postedBy === user.id && j.status === "expired" && p.status !== "expired") {
+        toast(`Deadline passed on “${j.title}” — ${money(j.payout)} refunded to your card. 🛡️`, "info");
+      } else if (j.claimedBy === user.id && j.status === "expired" && p.status !== "expired") {
+        toast(`“${j.title}” expired before it was finished — it's closed out.`, "info");
       }
     });
     /* eslint-disable-next-line */
@@ -2702,6 +2744,7 @@ em{font-style:normal;color:var(--primary)}
 .sbadge-open{background:var(--primary-l);color:#ff7e92;border:1px solid var(--line2)}
 .sbadge-claimed{background:var(--cyan-l);color:var(--cyan);border:1px solid #0c3d49}
 .sbadge-done{background:var(--mint-l);color:var(--mint);border:1px solid #103f2e}
+.sbadge-refunded{background:var(--mint-l);color:var(--mint);border:1px solid #103f2e}
 .cat-tag{font-size:11.5px;font-weight:700;color:#ff8ea0;background:var(--primary-l);padding:4px 11px;border-radius:999px;border:1px solid var(--line2);text-transform:uppercase;letter-spacing:.03em;font-family:var(--disp)}
 .effort{font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em;font-family:var(--disp)}
 .effort-light{background:var(--mint-l);color:var(--mint)}
@@ -2758,6 +2801,10 @@ em{font-style:normal;color:var(--primary)}
 .loc-btn:active{transform:translateY(1px)}
 .loc-btn:disabled{opacity:.5;cursor:default}
 .pay-note{font-size:12px;color:var(--muted);text-align:center;margin:8px 0 0}
+.refund-note{display:flex;gap:8px;align-items:flex-start;margin:12px 0 2px;padding:10px 12px;border-radius:12px;background:rgba(35,232,155,.10);border:1px solid rgba(35,232,155,.30);color:var(--ink2);font-size:12.5px;line-height:1.45}
+.refund-note svg{flex:0 0 auto;margin-top:1px;color:var(--mint)}
+.refund-note strong{color:var(--mint);font-weight:700}
+.refund-note-sm{margin:8px 0 0;padding:7px 10px;font-size:11.5px;border-radius:10px}
 .pay-hint{display:flex;gap:10px;align-items:flex-start;background:var(--mint-l);border:1px solid #103f2e;border-radius:13px;padding:11px 14px;font-size:12.5px;line-height:1.5;color:var(--ink2);font-weight:500}
 .pay-hint-ic{flex:none;width:24px;height:24px;border-radius:8px;background:var(--mint);color:#06231a;display:grid;place-items:center;margin-top:1px}
 .pay-hint strong{color:var(--mint);font-weight:800}
@@ -2946,6 +2993,7 @@ em{font-style:normal;color:var(--primary)}
 .payout-big span{font-size:13px;color:var(--muted);font-weight:600;margin-left:4px;font-family:var(--font)}
 .claim-strip{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--cyan);background:var(--cyan-l);padding:9px 13px;border-radius:11px;font-weight:600;margin-top:2px;border:1px solid #0c3d49}
 .done-strip{color:var(--mint);background:var(--mint-l);border-color:#103f2e}
+.refund-strip{color:var(--mint);background:var(--mint-l);border-color:#103f2e}
 .claim-strip strong{font-weight:800}
 .jc-actions{margin-top:4px;display:flex;justify-content:flex-end}
 
