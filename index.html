@@ -2440,16 +2440,12 @@ function App() {
       e.count++; map.set(m.job_id, e);
     });
     setMsgNotifs(Array.from(map.values()));
-    // fire a device notification for messages that arrived since the last check
+    // Track the newest seen message; the device notification for new messages
+    // is delivered by the server push (send-push), shown by the service worker.
     const newest = rows.reduce((mx, m) => Math.max(mx, Number(m.created_at) || 0), 0);
     const prevTs = lastMsgTsRef.current;
     if (prevTs == null) { lastMsgTsRef.current = newest; }
-    else if (newest > prevTs) {
-      const fresh = rows.filter(m => (Number(m.created_at) || 0) > prevTs);
-      lastMsgTsRef.current = newest;
-      if (fresh.length) pushNote("New message" + (fresh.length > 1 ? "s" : ""),
-        fresh.length === 1 ? `From ${fresh[0].sender_name || "someone"}` : `${fresh.length} new messages`);
-    }
+    else if (newest > prevTs) { lastMsgTsRef.current = newest; }
   }
   function markMsgsSeen() {
     if (!user) return;
@@ -2498,19 +2494,14 @@ function App() {
       if (j.claimedBy === user.id && j.status === "completed" && p.status !== "completed") {
         refreshProfile(); celebrate(true);
         toast(`Your work on “${j.title}” was approved! 🎉`, "success");
-        pushNote("Work approved 🎉", `“${j.title}” — payment released to you.`);
       } else if (j.claimedBy === user.id && j.status === "claimed" && p.status === "submitted") {
         toast(`“${j.title}” needs a few changes — check your tasks.`, "info");
-        pushNote("Changes requested", `“${j.title}” — the client asked for a few tweaks.`);
       } else if (j.postedBy === user.id && j.status === "submitted" && p.status !== "submitted") {
         toast(`“${j.title}” was submitted — ready for your review.`, "info");
-        pushNote("Work submitted for review", `“${j.title}” — review the photos and approve.`);
       } else if (j.postedBy === user.id && j.status === "claimed" && p.status === "open") {
         toast(`${j.claimedByName || "Someone"} claimed “${j.title}”.`, "info");
-        pushNote("Quest claimed", `${j.claimedByName || "Someone"} claimed “${j.title}”.`);
       } else if (j.postedBy === user.id && j.status === "open" && p.status === "claimed") {
         toast(`“${j.title}” came back — your quester couldn't finish it.`, "info");
-        pushNote("Quest came back", `“${j.title}” was released — it's back on your board.`);
       }
     });
     /* eslint-disable-next-line */
