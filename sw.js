@@ -22,14 +22,23 @@ self.addEventListener("notificationclick", (e) => {
   })());
 });
 
-// Future-ready: if a push server is added later, this renders the message.
+// Server-sent push. Show a system notification only when the app isn't open in
+// any window — when it's open (focused or backgrounded) the in-app UI handles it,
+// so we don't double up.
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) {}
   const title = d.title || "SideQuest";
-  e.waitUntil(self.registration.showNotification(title, {
+  const opts = {
     body: d.body || "",
     tag: d.tag,
+    icon: "icon-192.png",
+    badge: "icon-192.png",
     data: { url: d.url || "/" },
-  }));
+  };
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (wins.length > 0) return;   // app is open somewhere → let the page notify
+    await self.registration.showNotification(title, opts);
+  })());
 });
