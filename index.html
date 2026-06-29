@@ -1788,7 +1788,7 @@ function WorkerHome() {
         <div className="ls-r"><Flame size={16} className="flame" />{user.streak || 0}</div>
       </div>
 
-      <PayoutHint />
+      {view === "browse" && <PayoutPanel />}
 
       <div className="energy-row">
         <span className="energy-label"><Gauge size={15} /> Energy today</span>
@@ -1860,14 +1860,14 @@ function Toggle({ on, onChange, label, hint, icon: Icon }) {
     </div>
   );
 }
-function SettingsScreen() {
-  const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform, deleteAccount } = useApp();
+// Earnings + cash-out card. Self-contained so it can live both in Settings and
+// on the quester's home page. Pulls everything it needs from context; callers
+// just render <PayoutPanel/> (gate to workers at the call site).
+function PayoutPanel() {
+  const { user, saveSettings, toast, refreshProfile, platform } = useApp();
   const s = user.settings || {};
-  const [name, setName] = useState(user.name);
-  const [busyPay, setBusyPay] = useState(false);
-  const [delOpen, setDelOpen] = useState(false);
-  const [delBusy, setDelBusy] = useState(false);
   const set = patch => saveSettings(patch);
+  const [busyPay, setBusyPay] = useState(false);
   const available = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
   // Mirror the server's instant-payout math (1% of the balance, min $0.50) so the
   // worker sees the fee before they confirm. The server is the source of truth.
@@ -1879,8 +1879,6 @@ function SettingsScreen() {
   const inCooldown = cashoutInterval > 0 && (user.lastCashoutAt || 0) > 0 && Date.now() < nextCashoutAt;
   const neverCashed = !(user.lastCashoutAt > 0);
   const fmtDay = ts => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const canNotify = ("Notification" in window) && Notification.permission === "granted";
-  const notifBlocked = ("Notification" in window) && Notification.permission === "denied";
 
   // Ask Stripe directly whether this quester's payout account is ready, so the
   // cash-out buttons appear as soon as onboarding is done — without waiting on
@@ -1897,22 +1895,6 @@ function SettingsScreen() {
     })();
     /* eslint-disable-next-line */
   }, []);
-
-  async function toggleDevicePush(on) {
-    if (!on) { set({ push: false }); toast("Device notifications off.", "info"); return; }
-    if (!("Notification" in window)) { toast("This browser doesn't support notifications.", "info"); return; }
-    let perm = Notification.permission;
-    if (perm === "default") perm = await Notification.requestPermission();
-    if (perm === "granted") {
-      set({ push: true });
-      subscribeToPush();
-      deviceNotify("Notifications on ✅", "You'll get a heads-up here when your quests update.", { force: true });
-      toast("Device notifications on.", "success");
-    } else {
-      set({ push: false });
-      toast("Notifications are blocked — allow them for this site in your browser, then try again.", "info");
-    }
-  }
 
   async function connectPayouts() {
     setBusyPay(true);
@@ -1965,6 +1947,97 @@ function SettingsScreen() {
       toast("Couldn't open payout settings. Try again.", "error");
     } catch (e) { toast(e.message || "Couldn't open payout settings.", "error"); }
     setBusyPay(false);
+  }
+
+  return (
+    <div className="card set-card payout-panel">
+      <h2 className="set-h"><DollarSign size={17} /> Earnings &amp; payouts</h2>
+      <div className="cashout-box">
+        <div className="cashout-amt">{money(available)}</div>
+        <div className="cashout-sub">available to cash out · {money(user.totalEarned || 0)} earned all-time</div>
+      </div>
+      <p className="payout-how"><strong>How it works:</strong> when a client approves your quest, that payment lands here. Cash out to send it to your bank — <em>standard</em> is free and arrives in a couple of business days, or pay a small fee for <em>instant</em> to your debit card. You can also flip on auto cash-out and we'll send it on a schedule.</p>
+      {!PAYMENTS_ENABLED ? (
+        <p className="set-p">Payouts are turned off in this build.</p>
+      ) : !user.payoutsEnabled ? (
+        <>
+          <Btn variant="primary" icon={DollarSign} onClick={connectPayouts} disabled={busyPay}>
+            {busyPay ? "Opening Stripe…" : "Set up payouts with Stripe"}
+          </Btn>
+          <p className="auth-fine">You'll link a bank account through Stripe's secure onboarding. Stripe handles identity and bank details — SideQuest never sees them.</p>
+          <p className="auth-fine">Already finished Stripe setup but still see this? <button className="linklike" onClick={checkPayoutStatus} disabled={busyPay}>Refresh status</button></p>
+        </>
+      ) : (
+        <>
+          {inCooldown ? (
+            <div className="cooldown-box">
+              <Clock size={15} strokeWidth={2.5} />
+              <div>
+                <strong>Next cash-out: {fmtDay(nextCashoutAt)}</strong>
+                <div className="cooldown-sub">Cash-outs run once every {cashoutInterval} days. {available > 0 ? `${money(available)} is waiting and will be ready then.` : ""}</div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Btn variant="success" icon={DollarSign} onClick={() => cashOut(false)} disabled={busyPay || available <= 0}>
+                {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
+              </Btn>
+              {available > 0 && (
+                <button className="instant-btn" onClick={() => cashOut(true)} disabled={busyPay}>
+                  <span className="instant-l"><Zap size={15} strokeWidth={2.6} /> Instant cash out</span>
+                  <span className="instant-r">get {money(instantNet)} now · {money(instantFee)} fee</span>
+                </button>
+              )}
+            </>
+          )}
+          {neverCashed && available > 0 && !inCooldown && (
+            <p className="auth-fine">Heads up: your <em>first</em> cash-out clears once your earliest quest payments settle with Stripe — usually a few days, and new accounts can take up to ~2 weeks. If it says funds are still settling, give it a day and try again.</p>
+          )}
+          <label className="autopay-row">
+            <div className="autopay-l">
+              <RefreshCw size={15} strokeWidth={2.5} />
+              <div>
+                <div className="autopay-t">Auto cash out{cashoutInterval > 0 ? ` every ${cashoutInterval} days` : ""}</div>
+                <div className="autopay-h">We'll send your balance to your bank on schedule — no need to remember.</div>
+              </div>
+            </div>
+            <Toggle on={s.autoPayout === true} onChange={v => set(v ? { autoPayout: true, autoPayoutSince: Date.now() } : { autoPayout: false })} />
+          </label>
+          <div className="payout-info">
+            <div className="pi-row"><Check size={13} strokeWidth={3} /> <span><strong>Standard (free):</strong> your earnings move to your Stripe account and deposit to your bank on their own.</span></div>
+            <div className="pi-row"><Zap size={13} /> <span><strong>Instant (small fee):</strong> goes to your debit card, usually within ~30 minutes. You'll need a debit card added in payout settings.</span></div>
+            <div className="pi-row"><Clock size={13} /> <span>You can cash out once every {cashoutInterval || "—"} days. Your <em>first</em> standard payout can take ~7–14 days while Stripe verifies you; after that, about 2 business days.</span></div>
+          </div>
+          <p className="auth-fine"><button className="linklike" onClick={openPayoutDashboard}>Manage payout account / add debit card</button></p>
+        </>
+      )}
+    </div>
+  );
+}
+function SettingsScreen() {
+  const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform, deleteAccount } = useApp();
+  const s = user.settings || {};
+  const [name, setName] = useState(user.name);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
+  const set = patch => saveSettings(patch);
+  const canNotify = ("Notification" in window) && Notification.permission === "granted";
+  const notifBlocked = ("Notification" in window) && Notification.permission === "denied";
+
+  async function toggleDevicePush(on) {
+    if (!on) { set({ push: false }); toast("Device notifications off.", "info"); return; }
+    if (!("Notification" in window)) { toast("This browser doesn't support notifications.", "info"); return; }
+    let perm = Notification.permission;
+    if (perm === "default") perm = await Notification.requestPermission();
+    if (perm === "granted") {
+      set({ push: true });
+      subscribeToPush();
+      deviceNotify("Notifications on ✅", "You'll get a heads-up here when your quests update.", { force: true });
+      toast("Device notifications on.", "success");
+    } else {
+      set({ push: false });
+      toast("Notifications are blocked — allow them for this site in your browser, then try again.", "info");
+    }
   }
 
   async function doDelete() {
@@ -2080,69 +2153,7 @@ function SettingsScreen() {
         <div className="set-meta"><span className="cap">Current</span> {(THEME_PRESETS.find(p => (p.hex || null) === (s.themeColor || null)) || {}).name || "Custom"}</div>
       </div>
 
-      {user.type === "worker" && (
-        <div className="card set-card">
-          <h2 className="set-h"><DollarSign size={17} /> Earnings & payouts</h2>
-          <div className="cashout-box">
-            <div className="cashout-amt">{money(available)}</div>
-            <div className="cashout-sub">available to cash out · {money(user.totalEarned || 0)} earned all-time</div>
-          </div>
-          {!PAYMENTS_ENABLED ? (
-            <p className="set-p">Payouts are turned off in this build.</p>
-          ) : !user.payoutsEnabled ? (
-            <>
-              <Btn variant="primary" icon={DollarSign} onClick={connectPayouts} disabled={busyPay}>
-                {busyPay ? "Opening Stripe…" : "Set up payouts with Stripe"}
-              </Btn>
-              <p className="auth-fine">You'll link a bank account through Stripe's secure onboarding. Stripe handles identity and bank details — SideQuest never sees them.</p>
-              <p className="auth-fine">Already finished Stripe setup but still see this? <button className="linklike" onClick={checkPayoutStatus} disabled={busyPay}>Refresh status</button></p>
-            </>
-          ) : (
-            <>
-              {inCooldown ? (
-                <div className="cooldown-box">
-                  <Clock size={15} strokeWidth={2.5} />
-                  <div>
-                    <strong>Next cash-out: {fmtDay(nextCashoutAt)}</strong>
-                    <div className="cooldown-sub">Cash-outs run once every {cashoutInterval} days. {available > 0 ? `${money(available)} is waiting and will be ready then.` : ""}</div>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <Btn variant="success" icon={DollarSign} onClick={() => cashOut(false)} disabled={busyPay || available <= 0}>
-                    {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
-                  </Btn>
-                  {available > 0 && (
-                    <button className="instant-btn" onClick={() => cashOut(true)} disabled={busyPay}>
-                      <span className="instant-l"><Zap size={15} strokeWidth={2.6} /> Instant cash out</span>
-                      <span className="instant-r">get {money(instantNet)} now · {money(instantFee)} fee</span>
-                    </button>
-                  )}
-                </>
-              )}
-              {neverCashed && available > 0 && !inCooldown && (
-                <p className="auth-fine">Heads up: your <em>first</em> cash-out clears once your earliest quest payments settle with Stripe — usually a few days, and new accounts can take up to ~2 weeks. If it says funds are still settling, give it a day and try again.</p>
-              )}
-              <label className="autopay-row">
-                <div className="autopay-l">
-                  <RefreshCw size={15} strokeWidth={2.5} />
-                  <div>
-                    <div className="autopay-t">Auto cash out{cashoutInterval > 0 ? ` every ${cashoutInterval} days` : ""}</div>
-                    <div className="autopay-h">We'll send your balance to your bank on schedule — no need to remember.</div>
-                  </div>
-                </div>
-                <Toggle on={s.autoPayout === true} onChange={v => set(v ? { autoPayout: true, autoPayoutSince: Date.now() } : { autoPayout: false })} />
-              </label>
-              <div className="payout-info">
-                <div className="pi-row"><Check size={13} strokeWidth={3} /> <span><strong>Standard (free):</strong> your earnings move to your Stripe account and deposit to your bank on their own.</span></div>
-                <div className="pi-row"><Zap size={13} /> <span><strong>Instant (small fee):</strong> goes to your debit card, usually within ~30 minutes. You'll need a debit card added in payout settings.</span></div>
-                <div className="pi-row"><Clock size={13} /> <span>You can cash out once every {cashoutInterval || "—"} days. Your <em>first</em> standard payout can take ~7–14 days while Stripe verifies you; after that, about 2 business days.</span></div>
-              </div>
-              <p className="auth-fine"><button className="linklike" onClick={openPayoutDashboard}>Manage payout account / add debit card</button></p>
-            </>
-          )}
-        </div>
-      )}
+      {user.type === "worker" && <PayoutPanel />}
 
       {user.type === "worker" && (
         <div className="card set-card">
@@ -4445,6 +4456,9 @@ em{font-style:normal;color:var(--primary)}
 .autopay-l>svg{flex:none;margin-top:2px;color:var(--mint)}
 .autopay-t{font-weight:700;font-size:14px;color:var(--ink);font-family:var(--disp)}
 .autopay-h{font-size:12px;color:var(--muted);line-height:1.4;margin-top:1px}
+.payout-how{font-size:12.5px;line-height:1.5;color:var(--muted);background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:11px 13px;margin:0 0 11px}
+.payout-how strong{color:var(--ink);font-weight:800}
+.payout-panel{margin-bottom:16px}
 
 /* tipping */
 .tip-box{margin-top:11px;border-top:1px solid var(--line);padding-top:11px}
