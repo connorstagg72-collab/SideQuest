@@ -126,6 +126,7 @@ function defaultSettings(type, name) {
     companyName: type === "client" ? (name || "") : "",
     defaultPayout: 60, notify: true, reminders: true,
     remindStart: true, remindStartMin: 30, remindDeadline: true, remindDeadlineMin: 120,
+    notifyNewJobs: false, notifyScope: "city",
   };
 }
 
@@ -1939,6 +1940,24 @@ function SettingsScreen() {
           }}>Send a test push</Btn>
         )}
         {notifBlocked && <p className="auth-fine">Notifications are blocked for this site in your browser — you'll need to allow them in site settings first.</p>}
+
+        {user.type === "worker" && (
+          <div className="njobs">
+            <Toggle icon={MapPin} label="Notify me about new quests" hint="A push whenever a quest is posted near you" on={s.notifyNewJobs === true} onChange={v => set({ notifyNewJobs: v })} />
+            {s.notifyNewJobs === true && (
+              <div className="njobs-scope">
+                <span className="njobs-scope-l">Which quests?</span>
+                <div className="chips">
+                  <Chip active={(s.notifyScope || "city") === "city"} onClick={() => set({ notifyScope: "city" })}>My city</Chip>
+                  <Chip active={s.notifyScope === "surrounding"} onClick={() => set({ notifyScope: "surrounding" })}>Surrounding cities</Chip>
+                </div>
+              </div>
+            )}
+            {s.notifyNewJobs === true && (!s.push || !canNotify) && <p className="auth-fine">Turn on device notifications above to actually receive these.</p>}
+            {s.notifyNewJobs === true && user.homeLat == null && <p className="auth-fine">Set your location on the Browse tab so we know which quests count as “near you.”</p>}
+            <p className="njobs-note"><Zap size={12} strokeWidth={2.6} /> A quest someone drops urgently needs covering, so it'll always reach you when device notifications are on — even with this turned off.</p>
+          </div>
+        )}
       </div>
 
       <div className="card set-card">
@@ -3327,6 +3346,8 @@ function App() {
     const { job, error } = await dbInsertJob(row);
     if (error || !job) { toast("Couldn't post that quest — try again.", "error"); return false; }
     setJobs(prev => [job, ...prev]);
+    // Alert nearby questers who opted into new-quest notifications.
+    callFn("notify-job", { jobId: job.id, urgent: false }).catch(() => {});
     celebrate(false);
     return true;
   }
@@ -3468,6 +3489,8 @@ function App() {
     const { error } = await dbUpdateJob(id, patch);
     if (error) { toast("Couldn't release that quest — try again.", "error"); reloadJobs(); return; }
     play("toggle");
+    // Urgent: alert questers in this city that a dropped quest needs covering.
+    callFn("notify-job", { jobId: id, urgent: true }).catch(() => {});
     toast("Released back to the board. Take care of yourself. 💛", "info");
     setView("browse");
   }
@@ -4195,6 +4218,13 @@ em{font-style:normal;color:var(--primary)}
   .pod-earn{font-size:12.5px}
   .aw-who{max-width:84px}
 }
+
+/* new-quest notification settings */
+.njobs{margin-top:10px;padding-top:12px;border-top:1px solid var(--line)}
+.njobs-scope{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0 2px;padding-left:2px}
+.njobs-scope-l{font-size:12.5px;font-weight:700;color:var(--ink2);font-family:var(--disp)}
+.njobs-note{display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:1.45;color:var(--muted);background:var(--card2);border-radius:10px;padding:9px 11px;margin-top:9px}
+.njobs-note svg{flex:0 0 auto;margin-top:1px;color:var(--gold)}
 
 /* proof photos + review */
 .proof-up{margin-top:6px;display:flex;flex-direction:column;gap:8px}
