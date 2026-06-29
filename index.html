@@ -68,8 +68,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -125,6 +125,7 @@ function defaultSettings(type, name) {
     soundOn: true, stim: "high", energy: "Medium",
     companyName: type === "client" ? (name || "") : "",
     defaultPayout: 60, notify: true, reminders: true,
+    remindStart: true, remindStartMin: 30, remindDeadline: true, remindDeadlineMin: 120,
   };
 }
 
@@ -582,6 +583,12 @@ const questerNet = (payout, pct) => {
   const p = Math.min(100, Math.max(0, Number(pct) || 0));
   return Math.round((Number(payout) || 0) * (1 - p / 100) * 100) / 100;
 };
+// ---- date helpers for the schedule/calendar ----
+const startOfDay = ts => { const d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const ymd = ts => { const d = new Date(ts); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); };
+const monthLabel = d => d.toLocaleString(undefined, { month: "long", year: "numeric" });
+const clockTime = ts => new Date(ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+const hourLabel = h => { const ap = h < 12 ? "AM" : "PM"; const hr = (h % 12) === 0 ? 12 : h % 12; return hr + " " + ap; };
 const DAY = 86400000, HOUR = 3600000, MIN = 60000;
 function fmtRemaining(ms) {
   if (ms <= 0) return "Overdue";
@@ -2172,8 +2179,8 @@ function ProfileMenu() {
 function Nav() {
   const { user, view, setView, ui, setUi } = useApp();
   const tabs = user.type === "client"
-    ? [["post", "Post", Plus], ["jobs", "My quests", Briefcase], ["settings", "Settings", Settings]]
-    : [["browse", "Browse", Search], ["tasks", "Tasks", ListChecks], ["rewards", "Rewards", Trophy], ["settings", "Settings", Settings]];
+    ? [["post", "Post", Plus], ["jobs", "My quests", Briefcase], ["schedule", "Schedule", CalendarDays], ["settings", "Settings", Settings]]
+    : [["browse", "Browse", Search], ["tasks", "Tasks", ListChecks], ["schedule", "Schedule", CalendarDays], ["rewards", "Rewards", Trophy], ["settings", "Settings", Settings]];
   return (
     <nav className="nav">
       <div className="nav-inner">
@@ -2240,6 +2247,230 @@ function ConfigScreen() {
         </button>
         <p className="auth-fine">The anon key is safe to ship in the browser — your data is guarded by the Row Level Security rules in schema.sql.</p>
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   SCHEDULE — calendar + day timeline + drag-and-drop to-do board.
+   Both roles get it ("same same but different"): questers see their claimed
+   quests + reminder controls; clients see their posted quests. The to-do board
+   is personal and saved in the user's settings.
+   ============================================================ */
+const KB_LANES = [["todo", "To do"], ["doing", "Doing"], ["done", "Done"]];
+
+function ScheduleScreen() {
+  const { user, jobs } = useApp();
+  const isClient = user.type === "client";
+  const myJobs = jobs.filter(j => (isClient ? j.postedBy : j.claimedBy) === user.id);
+  const [selected, setSelected] = useState(() => startOfDay(Date.now()));
+
+  const entries = [];
+  myJobs.forEach(j => {
+    if (j.scheduledTime) entries.push({ job: j, time: j.scheduledTime, kind: "start" });
+    if (j.deadline) entries.push({ job: j, time: j.deadline, kind: "due" });
+  });
+
+  return (
+    <div className="page page-narrow sched-page">
+      <header className="page-head"><h1><CalendarDays size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Schedule</h1>
+        <p>{isClient ? "Your quests and deadlines on a calendar, plus a board to plan." : "See your day hour-by-hour, plan your tasks, and stay ahead of deadlines."}</p></header>
+      <MiniCalendar selected={selected} setSelected={setSelected} entries={entries} />
+      <DayTimeline selected={selected} entries={entries} isClient={isClient} />
+      {!isClient && <ReminderSettings />}
+      <KanbanBoard />
+    </div>
+  );
+}
+
+function MiniCalendar({ selected, setSelected, entries }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(selected); d.setDate(1); d.setHours(0, 0, 0, 0); return d; });
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const startWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = startOfDay(Date.now());
+  const dotDays = new Set(entries.map(e => ymd(e.time)));
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d).getTime());
+  const shift = delta => { const d = new Date(cursor); d.setMonth(d.getMonth() + delta); setCursor(d); play("click"); };
+  const WD = ["S", "M", "T", "W", "T", "F", "S"];
+  return (
+    <div className="card cal-card">
+      <div className="cal-head">
+        <button className="cal-nav" onClick={() => shift(-1)} aria-label="Previous month"><ChevronLeft size={18} strokeWidth={2.4} /></button>
+        <div className="cal-title">{monthLabel(cursor)}</div>
+        <button className="cal-nav" onClick={() => shift(1)} aria-label="Next month"><ChevronRight size={18} strokeWidth={2.4} /></button>
+      </div>
+      <div className="cal-grid cal-wd">{WD.map((w, i) => <div key={i} className="cal-wd-c">{w}</div>)}</div>
+      <div className="cal-grid">
+        {cells.map((ts, i) => {
+          if (ts == null) return <div key={i} className="cal-cell empty" />;
+          const isSel = startOfDay(ts) === startOfDay(selected);
+          const isToday = startOfDay(ts) === today;
+          return (
+            <button key={i} className={`cal-cell ${isSel ? "sel" : ""} ${isToday ? "today" : ""}`} onClick={() => { setSelected(startOfDay(ts)); play("pop"); }}>
+              {new Date(ts).getDate()}
+              {dotDays.has(ymd(ts)) && <span className="cal-dot" />}
+            </button>
+          );
+        })}
+      </div>
+      <button className="cal-today" onClick={() => { const t = startOfDay(Date.now()); setSelected(t); const d = new Date(t); d.setDate(1); setCursor(d); play("click"); }}>Jump to today</button>
+    </div>
+  );
+}
+
+function TimelineItem({ e, isClient }) {
+  const j = e.job;
+  const isDue = e.kind === "due";
+  return (
+    <div className={`tl-item ${isDue ? "due" : "start"}`}>
+      <span className="tl-time">{clockTime(e.time)}</span>
+      <span className="tl-main">
+        <span className="tl-title">{j.title}</span>
+        <span className="tl-sub">{isDue ? "Due" : "Starts"} · {j.category}{isClient && j.claimedByName ? " · " + j.claimedByName : ""}</span>
+      </span>
+      <StatusBadge status={j.status} />
+    </div>
+  );
+}
+
+function DayTimeline({ selected, entries, isClient }) {
+  const dayEntries = entries.filter(e => startOfDay(e.time) === startOfDay(selected)).sort((a, b) => a.time - b.time);
+  const HOURS = []; for (let h = 6; h <= 23; h++) HOURS.push(h);
+  const inRange = dayEntries.filter(e => { const h = new Date(e.time).getHours(); return h >= 6 && h <= 23; });
+  const outRange = dayEntries.filter(e => { const h = new Date(e.time).getHours(); return h < 6 || h > 23; });
+  const dateLabel = new Date(selected).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  return (
+    <div className="card day-card">
+      <div className="day-head"><Clock size={16} /> {dateLabel}</div>
+      {dayEntries.length === 0 && <div className="day-empty">Nothing scheduled this day. Enjoy the breathing room — or plan something on the board below.</div>}
+      {outRange.length > 0 && (
+        <div className="day-other">
+          <div className="day-other-h">Outside 6am–11pm</div>
+          {outRange.map((e, i) => <TimelineItem key={i} e={e} isClient={isClient} />)}
+        </div>
+      )}
+      {dayEntries.length > 0 && (
+        <div className="hours">
+          {HOURS.map(h => {
+            const items = inRange.filter(e => new Date(e.time).getHours() === h);
+            return (
+              <div key={h} className={`hour-row ${items.length ? "has" : ""}`}>
+                <div className="hour-label">{hourLabel(h)}</div>
+                <div className="hour-slot">{items.map((e, i) => <TimelineItem key={i} e={e} isClient={isClient} />)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReminderSettings() {
+  const { user, saveSettings } = useApp();
+  const s = user.settings || {};
+  const set = patch => saveSettings(patch);
+  const canPush = !!s.push;
+  const [startMin, setStartMin] = useState(s.remindStartMin ?? 30);
+  const [dlMin, setDlMin] = useState(s.remindDeadlineMin ?? 120);
+  return (
+    <div className="card set-card">
+      <h2 className="set-h"><Bell size={17} /> Reminders</h2>
+      <p className="set-p">Gentle nudges so a quest never sneaks up on you. These pop up while the app is open or installed.</p>
+      <Toggle icon={Clock} label="Remind me before a quest starts" hint="A heads-up ahead of your scheduled start time" on={s.remindStart !== false} onChange={v => set({ remindStart: v })} />
+      {s.remindStart !== false && (
+        <label className="field"><span className="field-label">Minutes before start</span>
+          <input className="field-input" type="number" min="5" max="240" step="5" value={startMin}
+            onChange={e => setStartMin(e.target.value)}
+            onBlur={() => { const v = Math.max(5, Math.min(240, Number(startMin) || 30)); setStartMin(v); set({ remindStartMin: v }); }} /></label>
+      )}
+      <Toggle icon={Timer} label="Remind me before a deadline" hint="So there's time to finish and submit" on={s.remindDeadline !== false} onChange={v => set({ remindDeadline: v })} />
+      {s.remindDeadline !== false && (
+        <label className="field"><span className="field-label">Minutes before deadline</span>
+          <input className="field-input" type="number" min="15" max="1440" step="15" value={dlMin}
+            onChange={e => setDlMin(e.target.value)}
+            onBlur={() => { const v = Math.max(15, Math.min(1440, Number(dlMin) || 120)); setDlMin(v); set({ remindDeadlineMin: v }); }} /></label>
+      )}
+      {!canPush && <p className="rem-hint"><Bell size={13} /> Tip: turn on device notifications in Settings so these show even when you're not looking at this tab.</p>}
+    </div>
+  );
+}
+
+function KanbanBoard() {
+  const { user, saveSettings } = useApp();
+  const todos = Array.isArray(user.settings && user.settings.todos) ? user.settings.todos : [];
+  const [dragId, setDragId] = useState(null);
+  const [overLane, setOverLane] = useState(null);
+  const [adding, setAdding] = useState({});
+
+  const save = next => saveSettings({ todos: next });
+  function addCard(lane) {
+    const text = (adding[lane] || "").trim();
+    if (!text) return;
+    save([...todos, { id: genId(), lane, body: text }]);
+    setAdding(a => ({ ...a, [lane]: "" }));
+    play("pop");
+  }
+  function removeCard(id) { play("toggle"); save(todos.filter(t => t.id !== id)); }
+  function drop(lane, beforeId) {
+    if (!dragId) return;
+    const dragged = todos.find(t => t.id === dragId);
+    if (!dragged) { setDragId(null); setOverLane(null); return; }
+    const without = todos.filter(t => t.id !== dragId);
+    let idx;
+    if (beforeId && beforeId !== dragId) {
+      idx = without.findIndex(t => t.id === beforeId);
+      if (idx < 0) idx = without.length;
+    } else {
+      let last = -1;
+      without.forEach((t, i) => { if (t.lane === lane) last = i; });
+      idx = last + 1;
+    }
+    without.splice(idx, 0, { ...dragged, lane });
+    save(without);
+    setDragId(null); setOverLane(null);
+    play("click");
+  }
+  return (
+    <div className="card kb-card">
+      <h2 className="set-h"><ListChecks size={17} /> To-do board</h2>
+      <p className="set-p">Brain-dump here and drag tasks across as you go. It's just for you.</p>
+      <div className="kb">
+        {KB_LANES.map(([lane, label]) => {
+          const cards = todos.filter(t => t.lane === lane);
+          return (
+            <div key={lane} className={`kb-lane ${overLane === lane ? "over" : ""}`}
+              onDragOver={e => { e.preventDefault(); setOverLane(lane); }}
+              onDragLeave={() => setOverLane(o => (o === lane ? null : o))}
+              onDrop={e => { e.preventDefault(); drop(lane, null); }}>
+              <div className="kb-lane-h"><span>{label}</span><span className="kb-count">{cards.length}</span></div>
+              <div className="kb-cards">
+                {cards.length === 0 && <div className="kb-empty">Drop tasks here</div>}
+                {cards.map(c => (
+                  <div key={c.id} className={`kb-item ${dragId === c.id ? "dragging" : ""}`} draggable
+                    onDragStart={() => { setDragId(c.id); play("tick"); }}
+                    onDragEnd={() => { setDragId(null); setOverLane(null); }}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => { e.preventDefault(); e.stopPropagation(); drop(lane, c.id); }}>
+                    <span className="kb-grip"><GripVertical size={14} /></span>
+                    <span className="kb-body">{c.body}</span>
+                    <button className="kb-x" onClick={() => removeCard(c.id)} aria-label="Delete task"><X size={13} strokeWidth={2.6} /></button>
+                  </div>
+                ))}
+              </div>
+              <div className="kb-add">
+                <input value={adding[lane] || ""} onChange={e => setAdding(a => ({ ...a, [lane]: e.target.value }))}
+                  onKeyDown={e => e.key === "Enter" && addCard(lane)} placeholder="Add a task…" maxLength={140} />
+                <button className="kb-add-btn" onClick={() => addCard(lane)} aria-label="Add task"><Plus size={15} strokeWidth={2.6} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="kb-tip">Tip: drag with a mouse or trackpad. On a card, drop onto another to reorder; drop on a column to move it there.</p>
     </div>
   );
 }
@@ -3146,6 +3377,54 @@ function App() {
     /* eslint-disable-next-line */
   }, [phase, user && user.id]);
 
+  // ADHD reminders for questers: nudge before a claimed quest starts, and before
+  // its deadline. Shows a toast (when the app is in view) and a system
+  // notification (when it's backgrounded). Each reminder fires once, tracked in
+  // localStorage. For reminders when the app is fully CLOSED, deploy the
+  // optional send-reminders function (see schema.sql).
+  useEffect(() => {
+    if (phase !== "app" || !user || user.type !== "worker") return;
+    const key = "sq_rem_" + user.id;
+    const loadFired = () => { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); } };
+    const saveFired = set => { try { localStorage.setItem(key, JSON.stringify(Array.from(set).slice(-300))); } catch (e) {} };
+    function check() {
+      const s = user.settings || {};
+      const now = Date.now();
+      const fired = loadFired();
+      let changed = false;
+      jobs.filter(j => j.claimedBy === user.id && j.status === "claimed").forEach(j => {
+        if (s.remindStart !== false && j.scheduledTime) {
+          const lead = Math.max(5, Math.min(240, Number(s.remindStartMin) || 30)) * 60000;
+          const k = "s_" + j.id;
+          if (!fired.has(k) && now >= j.scheduledTime - lead && now <= j.scheduledTime + 60000) {
+            fired.add(k); changed = true;
+            const mins = Math.max(1, Math.round((j.scheduledTime - now) / 60000));
+            const msg = now >= j.scheduledTime ? `“${j.title}” is starting now.` : `“${j.title}” starts in about ${mins} min.`;
+            toast("⏰ " + msg, "info");
+            deviceNotify("Quest starting soon ⏰", msg, { tag: "start-" + j.id });
+          }
+        }
+        if (s.remindDeadline !== false && j.deadline) {
+          const lead = Math.max(15, Math.min(1440, Number(s.remindDeadlineMin) || 120)) * 60000;
+          const k = "d_" + j.id;
+          if (!fired.has(k) && now >= j.deadline - lead && now <= j.deadline) {
+            fired.add(k); changed = true;
+            const mins = Math.max(1, Math.round((j.deadline - now) / 60000));
+            const human = mins >= 60 ? "about " + Math.round(mins / 60) + " hr" : "about " + mins + " min";
+            const msg = `“${j.title}” is due in ${human}.`;
+            toast("⌛ " + msg, "info");
+            deviceNotify("Deadline coming up ⌛", msg, { tag: "dl-" + j.id });
+          }
+        }
+      });
+      if (changed) saveFired(fired);
+    }
+    check();
+    const t = setInterval(check, 60000);
+    return () => clearInterval(t);
+    /* eslint-disable-next-line */
+  }, [phase, user && user.id, jobs]);
+
   // Handle returns from Stripe Checkout / Connect onboarding (query flags).
   useEffect(() => {
     if (phase !== "app") return;
@@ -3238,6 +3517,8 @@ function App() {
                 <AdminScreen />
               ) : view === "support" ? (
                 <SupportScreen />
+              ) : view === "schedule" ? (
+                <ScheduleScreen />
               ) : (
                 <>
                   {user.type === "client" ? <ClientHome /> : <WorkerHome />}
@@ -3605,6 +3886,74 @@ em{font-style:normal;color:var(--primary)}
 /* unread badge on profile-menu links */
 .pm-link{position:relative}
 .pm-link-badge{margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center}
+
+/* ===== schedule: calendar ===== */
+.sched-page{display:flex;flex-direction:column;gap:14px}
+.cal-card{display:flex;flex-direction:column;gap:9px}
+.cal-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cal-title{font-family:var(--disp);font-weight:800;font-size:16px;color:var(--ink)}
+.cal-nav{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--card2);border:1px solid var(--line);color:var(--ink2);cursor:pointer;transition:.12s}
+.cal-nav:hover{border-color:var(--primary);color:var(--primary)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cal-wd{margin-bottom:-2px}
+.cal-wd-c{text-align:center;font-size:11px;font-weight:800;color:var(--muted);font-family:var(--disp);padding:2px 0}
+.cal-cell{position:relative;aspect-ratio:1/1;border-radius:10px;border:1px solid transparent;background:var(--card2);color:var(--ink2);font-weight:700;font-size:13.5px;font-family:var(--disp);cursor:pointer;display:grid;place-items:center;transition:.12s}
+.cal-cell:hover{border-color:var(--line2);color:var(--ink)}
+.cal-cell.empty{background:transparent;border:none;cursor:default}
+.cal-cell.today{color:var(--mint);border-color:var(--mint)}
+.cal-cell.sel{background:var(--primary);color:#fff;border-color:var(--primary)}
+.cal-cell.sel.today{color:#fff}
+.cal-dot{position:absolute;bottom:5px;width:5px;height:5px;border-radius:50%;background:var(--gold)}
+.cal-cell.sel .cal-dot{background:#fff}
+.cal-today{align-self:flex-start;background:none;border:none;color:var(--primary);font-weight:700;font-size:12.5px;cursor:pointer;font-family:var(--disp);padding:2px 0}
+.cal-today:hover{text-decoration:underline}
+/* ===== schedule: day timeline ===== */
+.day-card{display:flex;flex-direction:column;gap:8px}
+.day-head{display:flex;align-items:center;gap:8px;font-family:var(--disp);font-weight:800;font-size:15px;color:var(--ink)}
+.day-head svg{color:var(--primary)}
+.day-empty{font-size:13.5px;color:var(--muted);line-height:1.5;padding:6px 2px}
+.day-other{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px dashed var(--line2);border-radius:12px}
+.day-other-h{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.hours{display:flex;flex-direction:column;max-height:460px;overflow-y:auto;border:1px solid var(--line);border-radius:12px}
+.hour-row{display:flex;gap:10px;padding:5px 8px;border-bottom:1px solid var(--line);min-height:34px}
+.hour-row:last-child{border-bottom:none}
+.hour-row.has{background:var(--card2)}
+.hour-label{flex:0 0 52px;font-size:11.5px;font-weight:700;color:var(--muted);font-family:var(--disp);padding-top:5px}
+.hour-slot{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+.tl-item{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:11px;background:var(--card);border:1px solid var(--line2);border-left:3px solid var(--primary)}
+.tl-item.due{border-left-color:var(--gold)}
+.tl-time{flex:0 0 auto;font-size:12px;font-weight:800;color:var(--ink2);font-family:var(--mono, var(--disp))}
+.tl-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.tl-title{font-weight:700;font-size:13.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-sub{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rem-hint{display:flex;gap:7px;align-items:flex-start;font-size:12.5px;color:var(--ink2);background:var(--card2);border-radius:10px;padding:9px 11px;margin-top:4px;line-height:1.45}
+.rem-hint svg{flex:0 0 auto;margin-top:1px;color:var(--gold)}
+/* ===== schedule: kanban to-do ===== */
+.kb-card{display:flex;flex-direction:column;gap:8px}
+.kb{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.kb-lane{display:flex;flex-direction:column;gap:7px;background:var(--card2);border:1px solid var(--line);border-radius:13px;padding:8px;min-height:120px;transition:.12s}
+.kb-lane.over{border-color:var(--primary);background:var(--primary-l)}
+.kb-lane-h{display:flex;align-items:center;justify-content:space-between;font-family:var(--disp);font-weight:800;font-size:12.5px;color:var(--ink2);text-transform:uppercase;letter-spacing:.03em;padding:0 2px}
+.kb-count{min-width:18px;height:18px;border-radius:9px;background:var(--card);border:1px solid var(--line2);color:var(--muted);font-size:11px;display:grid;place-items:center}
+.kb-cards{display:flex;flex-direction:column;gap:6px;min-height:30px}
+.kb-empty{font-size:11.5px;color:var(--muted);text-align:center;padding:10px 4px;border:1px dashed var(--line2);border-radius:9px}
+.kb-item{display:flex;align-items:flex-start;gap:6px;padding:8px 9px;border-radius:10px;background:var(--card);border:1px solid var(--line2);cursor:grab;transition:.12s}
+.kb-item:hover{border-color:var(--primary)}
+.kb-item.dragging{opacity:.45}
+.kb-grip{flex:0 0 auto;color:var(--muted);cursor:grab;margin-top:1px}
+.kb-body{flex:1;min-width:0;font-size:13px;line-height:1.35;color:var(--ink);word-break:break-word}
+.kb-x{flex:0 0 auto;color:var(--muted);background:none;border:none;cursor:pointer;padding:1px;border-radius:6px;opacity:.6;transition:.12s}
+.kb-x:hover{opacity:1;color:var(--accent)}
+.kb-add{display:flex;gap:5px;margin-top:2px}
+.kb-add input{flex:1;min-width:0;background:var(--void);border:1.5px solid var(--line2);border-radius:9px;padding:7px 9px;font-size:12.5px;color:var(--ink);outline:none}
+.kb-add input:focus{border-color:var(--primary)}
+.kb-add-btn{flex:0 0 auto;width:32px;border-radius:9px;background:var(--card);border:1px solid var(--line2);color:var(--ink2);display:grid;place-items:center;cursor:pointer;transition:.12s}
+.kb-add-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+.kb-tip{font-size:11.5px;color:var(--muted);line-height:1.45}
+@media (max-width:560px){
+  .kb{grid-template-columns:1fr;gap:10px}
+  .hour-label{flex-basis:46px}
+}
 
 /* proof photos + review */
 .proof-up{margin-top:6px;display:flex;flex-direction:column;gap:8px}
