@@ -102,6 +102,11 @@ const SUPABASE_ANON_KEY = "sb_publishable_6_jwDsn_jbD2Z6gfX16wAw_1enaa6Od";
 const PAYMENTS_ENABLED = true;
 // Optional platform fee added on top of the payout at checkout (0 = none).
 const PLATFORM_FEE_PCT = 0;
+// Web Push (closed-app notifications). This is the VAPID *public* key — safe in
+// the browser. The matching private key lives only in the send-push edge
+// function's secrets. Leave blank to disable push (foreground notifications
+// still work). Regenerate the pair if you ever need to.
+const PUSH_PUBLIC_KEY = "BHTz6-2VEBnoV9XZ6C1f7aLcSNMNR0DpPo6qKvfYKWQgw8OBlOt5BRbTABJNQAaK3MGNlLbiPflsLuSjYEjnNL8";
 // --------------------------------------------------------------------
 
 // Live board updates across devices. schema.sql enables Realtime for the
@@ -430,6 +435,45 @@ function deviceNotify(title, body, opts) {
       new Notification(title, o);
     }
   } catch (e) {}
+}
+
+/* ---------- real Web Push (closed-app notifications) ---------- */
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+// Subscribe this device to push and save the subscription for the server to use.
+async function subscribeToPush() {
+  try {
+    if (!PUSH_PUBLIC_KEY || !("serviceWorker" in navigator) || !("PushManager" in window)) return false;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(PUSH_PUBLIC_KEY),
+      });
+    }
+    const json = sub.toJSON();
+    const { data } = await supabase.auth.getUser();
+    const uid = data && data.user && data.user.id;
+    if (uid) {
+      await supabase.from("push_subscriptions").upsert(
+        { user_id: uid, endpoint: json.endpoint, subscription: json },
+        { onConflict: "endpoint" }
+      );
+    }
+    return true;
+  } catch (e) { console.error("push subscribe failed", e); return false; }
+}
+// Ask the server to push a notification to another user's devices.
+async function sendPush(toUserId, title, body) {
+  if (!toUserId || !PUSH_PUBLIC_KEY) return;
+  try { await callFn("send-push", { to: toUserId, title, body }); } catch (e) { /* best-effort */ }
 }
 
 /* ---------- synthesized sound (Web Audio) ---------- */
@@ -1403,6 +1447,8 @@ function JobChat({ job }) {
     if (error) { toast("Message didn't send — try again.", "error"); setText(body); return; }
     if (data) { const m = rowToMsg(data); setMsgs(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]); }
     play("click");
+    const otherId = user.id === job.postedBy ? job.claimedBy : job.postedBy;
+    sendPush(otherId, `Message from ${user.name}`, body.length > 80 ? body.slice(0, 80) + "…" : body);
   }
 
   return (
@@ -1635,6 +1681,7 @@ function SettingsScreen() {
     if (perm === "default") perm = await Notification.requestPermission();
     if (perm === "granted") {
       set({ push: true });
+      subscribeToPush();
       deviceNotify("Notifications on ✅", "You'll get a heads-up here when your quests update.", { force: true });
       toast("Device notifications on.", "success");
     } else {
@@ -2261,6 +2308,7 @@ function App() {
     if (!claimed) { toast("Someone just grabbed that quest. 💨", "info"); reloadJobs(); return; }
     setJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
     celebrate(false); toast("Claimed! It's in your tasks. 🎯", "success");
+    sendPush(job.postedBy, "Quest claimed", `${user.name} claimed “${job.title}”.`);
     setView("tasks");
   }
   async function setSteps(id, steps) {
@@ -2279,6 +2327,7 @@ function App() {
     if (error) { toast("Couldn't submit — try again.", "error"); reloadJobs(); return false; }
     celebrate(false);
     toast("Submitted for review! The client will take a look. 📸", "success");
+    sendPush(job.postedBy, "Work submitted for review", `“${job.title}” is ready for you to review.`);
     setView("tasks");
     return true;
   }
@@ -2295,6 +2344,7 @@ function App() {
     if (error) { toast("Couldn't approve — try again.", "error"); reloadJobs(); return; }
     celebrate(true);
     toast(`Approved! ${money(job.payout)} released to ${job.claimedByName || "your quester"}. 🎉`, "success");
+    sendPush(job.claimedBy, "Work approved 🎉", `“${job.title}” was approved — ${money(job.payout)} is yours.`);
   }
   // Client sends the work back with notes; quest returns to the worker.
   async function requestChanges(id, noteText) {
@@ -2306,6 +2356,7 @@ function App() {
     if (error) { toast("Couldn't send it back — try again.", "error"); reloadJobs(); return; }
     play("toggle");
     toast("Sent back with your notes.", "info");
+    sendPush(job.claimedBy, "Changes requested", `“${job.title}” needs a few tweaks before approval.`);
   }
   function refreshJobs() { (async () => { await reloadJobs(); toast("Board refreshed.", "info"); })(); }
 
