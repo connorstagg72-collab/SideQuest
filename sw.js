@@ -22,9 +22,9 @@ self.addEventListener("notificationclick", (e) => {
   })());
 });
 
-// Server-sent push. Show a system notification unless the app is currently
-// on-screen (focused/visible) — in that case the in-app toast covers it, so we
-// don't double up. Backgrounded or closed → show it. Test pushes always show.
+// Server-sent push. Show a system notification unless a window is currently
+// focused (you're looking right at the app) — then the in-app toast covers it.
+// Switched tabs / another app / backgrounded / closed → show it. Test → always.
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) {}
@@ -39,10 +39,11 @@ self.addEventListener("push", (e) => {
   e.waitUntil((async () => {
     if (d.test) { await self.registration.showNotification(title, opts); return; }
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    // Only stay quiet if the app is actually on-screen — then the in-app toast
-    // covers it. If it's backgrounded or closed, show the system notification.
-    const onScreen = wins.some(w => w.focused || w.visibilityState === "visible");
-    if (onScreen) return;
+    // Stay quiet only if a window actually has focus (you're looking right at it)
+    // — then the in-app toast covers it. Switched tabs / another app / closed →
+    // show the system notification.
+    const focused = wins.some(w => w.focused);
+    if (focused) return;
     await self.registration.showNotification(title, opts);
   })());
 });
