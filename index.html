@@ -142,6 +142,7 @@ function rowToProfile(r) {
     stripeAccountId: r.stripe_account_id || null,
     payoutsEnabled: !!r.payouts_enabled,
     paidOut: Number(r.paid_out) || 0,
+    isAdmin: !!r.is_admin,
   };
 }
 function rowToJob(r) {
@@ -189,6 +190,41 @@ function profilePatchToRow(p) {
   if ("totalEarned" in p) r.total_earned = p.totalEarned;
   if ("homeLat" in p) r.home_lat = p.homeLat;
   if ("homeLng" in p) r.home_lng = p.homeLng;
+  return r;
+}
+const DEFAULT_PLATFORM = {
+  maxAccounts: 0, signupsEnabled: true, minPayout: 1, maxPayout: 0,
+  commissionPct: 0, maxActiveJobs: 0, postingEnabled: true,
+  payoutsEnabled: true, minCashout: 0, announcement: "",
+};
+function rowToPlatform(r) {
+  if (!r) return DEFAULT_PLATFORM;
+  return {
+    maxAccounts: Number(r.max_accounts) || 0,
+    signupsEnabled: r.signups_enabled !== false,
+    minPayout: Number(r.min_payout) || 0,
+    maxPayout: Number(r.max_payout) || 0,
+    commissionPct: Number(r.commission_pct) || 0,
+    maxActiveJobs: Number(r.max_active_jobs) || 0,
+    postingEnabled: r.posting_enabled !== false,
+    payoutsEnabled: r.payouts_enabled !== false,
+    minCashout: Number(r.min_cashout) || 0,
+    announcement: r.announcement || "",
+  };
+}
+function platformPatchToRow(p) {
+  const r = {};
+  if ("maxAccounts" in p) r.max_accounts = Math.max(0, Math.round(Number(p.maxAccounts) || 0));
+  if ("signupsEnabled" in p) r.signups_enabled = !!p.signupsEnabled;
+  if ("minPayout" in p) r.min_payout = Math.max(0, Number(p.minPayout) || 0);
+  if ("maxPayout" in p) r.max_payout = Math.max(0, Number(p.maxPayout) || 0);
+  if ("commissionPct" in p) r.commission_pct = Math.min(100, Math.max(0, Number(p.commissionPct) || 0));
+  if ("maxActiveJobs" in p) r.max_active_jobs = Math.max(0, Math.round(Number(p.maxActiveJobs) || 0));
+  if ("postingEnabled" in p) r.posting_enabled = !!p.postingEnabled;
+  if ("payoutsEnabled" in p) r.payouts_enabled = !!p.payoutsEnabled;
+  if ("minCashout" in p) r.min_cashout = Math.max(0, Number(p.minCashout) || 0);
+  if ("announcement" in p) r.announcement = String(p.announcement || "");
+  r.updated_at = new Date().toISOString();
   return r;
 }
 function jobPatchToRow(p) {
@@ -952,7 +988,7 @@ function RefundNote({ compact }) {
   );
 }
 function PostQuestForm() {
-  const { user, postJob, toast } = useApp();
+  const { user, postJob, toast, platform, jobs } = useApp();
   const [title, setTitle] = useState("");
   const [cat, setCat] = useState("Cleanup");
   const [desc, setDesc] = useState("");
@@ -983,6 +1019,14 @@ function PostQuestForm() {
     setErr("");
     if (!title.trim()) { play("error"); return setErr("Give the quest a clear title."); }
     if (Number(payout) <= 0) { play("error"); return setErr("Set a payout above $0."); }
+    if (!platform.postingEnabled) { play("error"); return setErr("New quests are paused right now — check back soon."); }
+    const pay = Number(payout);
+    if (pay < platform.minPayout) { play("error"); return setErr(`Minimum payout is ${money(platform.minPayout)}.`); }
+    if (platform.maxPayout > 0 && pay > platform.maxPayout) { play("error"); return setErr(`Maximum payout is ${money(platform.maxPayout)}.`); }
+    if (platform.maxActiveJobs > 0) {
+      const activeMine = jobs.filter(j => j.postedBy === user.id && ["open", "claimed", "submitted", "pending_payment"].includes(j.status)).length;
+      if (activeMine >= platform.maxActiveJobs) { play("error"); return setErr(`You can have at most ${platform.maxActiveJobs} active quests at once. Finish or cancel one first.`); }
+    }
     const dl = new Date(deadline).getTime();
     if (!dl || dl < Date.now()) { play("error"); return setErr("Pick a deadline in the future."); }
 
@@ -1215,7 +1259,7 @@ function Empty({ icon: Icon, title, body }) {
   );
 }
 function BrowseCard({ job, distance }) {
-  const { user, claimJob } = useApp();
+  const { user, claimJob, platform } = useApp();
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState(toLocalInput(Math.min(Date.now() + HOUR, job.deadline)));
   const [err, setErr] = useState("");
@@ -1239,6 +1283,9 @@ function BrowseCard({ job, distance }) {
       <h3 className="jc-title">{job.title}</h3>
       {job.desc && <p className="jc-desc">{job.desc}</p>}
       <div className="payout-big">{money(job.payout)}<span> flat</span></div>
+      {platform.commissionPct > 0 && (
+        <div className="net-hint"><ShieldCheck size={12} strokeWidth={2.4} /> You earn {money(Math.round(job.payout * (1 - platform.commissionPct / 100)))} after the {platform.commissionPct}% platform fee</div>
+      )}
       <div className="jc-meta">
         {job.location && <span className="meta-i"><MapPin size={13} />{job.location}</span>}
         {distance != null && <span className="meta-i dist-i"><Target size={12} strokeWidth={2.6} />{fmtMiles(distance)} away</span>}
@@ -1736,7 +1783,7 @@ function Toggle({ on, onChange, label, hint, icon: Icon }) {
   );
 }
 function SettingsScreen() {
-  const { user, saveSettings, logout, toast, refreshProfile, switchMode } = useApp();
+  const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform } = useApp();
   const s = user.settings || {};
   const [name, setName] = useState(user.name);
   const [busyPay, setBusyPay] = useState(false);
@@ -1776,6 +1823,8 @@ function SettingsScreen() {
     setBusyPay(false);
   }
   async function cashOut() {
+    if (!platform.payoutsEnabled) { toast("Cashouts are paused right now — check back soon.", "info"); return; }
+    if (available < platform.minCashout) { toast(`You need at least ${money(platform.minCashout)} before you can cash out.`, "info"); return; }
     setBusyPay(true);
     try {
       const r = await callFn("stripe-connect", { action: "payout" });
@@ -2055,6 +2104,11 @@ function ProfileMenu() {
                 <Icon size={15} strokeWidth={2.3} /><span>{label}</span>
               </button>
             ))}
+            {user.isAdmin && (
+              <button className="pm-link pm-admin" onClick={() => go("admin")}>
+                <ShieldCheck size={15} strokeWidth={2.3} /><span>Admin controls</span>
+              </button>
+            )}
             <button className="pm-link danger" onClick={() => { setOpen(false); logout(); }}>
               <LogOut size={15} strokeWidth={2.3} /><span>Log out</span>
             </button>
@@ -2140,6 +2194,72 @@ function ConfigScreen() {
 }
 
 /* ============================================================
+   ADMIN — platform controls (only rendered for is_admin accounts)
+   ============================================================ */
+function AdminScreen() {
+  const { platform, savePlatform } = useApp();
+  const [f, setF] = useState(platform);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setF(platform); }, [platform]);
+  const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+  const num = (k, v) => set(k, v === "" ? "" : Number(v));
+  async function save() { setBusy(true); await savePlatform(f); setBusy(false); }
+  const sample = 100;
+  const pct = Math.min(100, Math.max(0, Number(f.commissionPct) || 0));
+  const net = Math.round(sample * (1 - pct / 100));
+
+  return (
+    <div className="page page-narrow">
+      <header className="page-head"><h1><ShieldCheck size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Admin controls</h1><p>These apply to the whole platform. You can still post and complete quests like anyone else.</p></header>
+
+      <div className="card set-card">
+        <h2 className="set-h"><DollarSign size={17} /> Commission</h2>
+        <p className="set-p">The cut your company keeps from every completed quest. The quester receives the rest; the client always pays the full payout.</p>
+        <label className="field"><span className="field-label">Commission (%)</span>
+          <input className="field-input" type="number" min="0" max="100" step="0.5" value={f.commissionPct} onChange={e => num("commissionPct", e.target.value)} /></label>
+        <p className="admin-preview"><Sparkles size={13} /> On a {money(sample)} quest, the quester nets <strong>{money(net)}</strong> and you keep <strong>{money(sample - net)}</strong>.</p>
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><Briefcase size={17} /> Quest rules</h2>
+        <div className="grid-2">
+          <label className="field"><span className="field-label">Min payout ($)</span>
+            <input className="field-input" type="number" min="0" value={f.minPayout} onChange={e => num("minPayout", e.target.value)} /></label>
+          <label className="field"><span className="field-label">Max payout ($, 0 = none)</span>
+            <input className="field-input" type="number" min="0" value={f.maxPayout} onChange={e => num("maxPayout", e.target.value)} /></label>
+        </div>
+        <label className="field"><span className="field-label">Max active quests per client (0 = unlimited)</span>
+          <input className="field-input" type="number" min="0" value={f.maxActiveJobs} onChange={e => num("maxActiveJobs", e.target.value)} /></label>
+        <Toggle icon={Plus} label="Allow new quest posts" hint="Turn off to pause all new postings platform-wide" on={f.postingEnabled} onChange={v => set("postingEnabled", v)} />
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><User size={17} /> Accounts</h2>
+        <label className="field"><span className="field-label">Max total accounts (0 = unlimited)</span>
+          <input className="field-input" type="number" min="0" value={f.maxAccounts} onChange={e => num("maxAccounts", e.target.value)} /></label>
+        <Toggle icon={User} label="Allow new signups" hint="Turn off to close registration" on={f.signupsEnabled} onChange={v => set("signupsEnabled", v)} />
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><TrendingUp size={17} /> Payouts</h2>
+        <label className="field"><span className="field-label">Minimum balance to cash out ($)</span>
+          <input className="field-input" type="number" min="0" value={f.minCashout} onChange={e => num("minCashout", e.target.value)} /></label>
+        <Toggle icon={TrendingUp} label="Allow quester cashouts" hint="Turn off to pause withdrawals" on={f.payoutsEnabled} onChange={v => set("payoutsEnabled", v)} />
+      </div>
+
+      <div className="card set-card">
+        <h2 className="set-h"><Bell size={17} /> Announcement banner</h2>
+        <p className="set-p">Shown at the top of the app for everyone while it isn't empty.</p>
+        <textarea className="field-input field-area" rows={2} placeholder="e.g. Heads up — scheduled maintenance Sunday 2–3am" value={f.announcement} onChange={e => set("announcement", e.target.value)} />
+      </div>
+
+      <Btn full size="lg" icon={Check} onClick={save} disabled={busy} sound="success">{busy ? "Saving…" : "Save platform settings"}</Btn>
+      <p className="pay-note">Only your admin account can change these. Limits and commission are also enforced on the server, so they can't be bypassed.</p>
+    </div>
+  );
+}
+
+/* ============================================================
    APP
    ============================================================ */
 function App() {
@@ -2153,6 +2273,7 @@ function App() {
   const [confetti, setConfetti] = useState(0);
   const [focusJob, setFocusJob] = useState(null);
   const [msgNotifs, setMsgNotifs] = useState([]);
+  const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
 
   const reduceMotion = useRef(false);
   useEffect(() => {
@@ -2192,7 +2313,23 @@ function App() {
     }
     const res = await dbFetchJobs();
     setJobs(res.jobs);
+    refreshPlatform();
     enter(profile);
+    return true;
+  }
+  // Platform-wide settings (commission, caps, banner…). Everyone reads them;
+  // only admins can save (enforced by RLS + DB triggers, not just here).
+  async function refreshPlatform() {
+    try {
+      const { data } = await supabase.from("app_settings").select("*").limit(1).maybeSingle();
+      if (data) setPlatform(rowToPlatform(data));
+    } catch (e) { /* keep defaults */ }
+  }
+  async function savePlatform(patch) {
+    const { error } = await supabase.from("app_settings").update(platformPatchToRow(patch)).eq("singleton", true);
+    if (error) { toast(error.message || "Couldn't save — are you the admin?", "error"); return false; }
+    await refreshPlatform();
+    toast("Platform settings saved.", "success");
     return true;
   }
 
@@ -2247,6 +2384,10 @@ function App() {
 
   /* ---- auth actions (Supabase Auth) ---- */
   async function signup({ name, email, password, type }) {
+    try {
+      const { data: open } = await supabase.rpc("signups_open");
+      if (open === false) return { ok: false, error: "Signups are closed right now. Please check back later." };
+    } catch (e) { /* if the check fails, fall through — the DB still enforces it */ }
     const { data, error } = await supabase.auth.signUp({
       email, password, options: { data: { name, type } },
     });
@@ -2634,6 +2775,7 @@ function App() {
     setHomeLocation, refreshProfile, releaseJob, switchMode,
     msgNotifs, refreshMsgNotifs, markMsgsSeen,
     cancelJob, approveCancellation, declineCancellation,
+    platform, savePlatform, refreshPlatform,
   };
 
   return (
@@ -2656,9 +2798,18 @@ function App() {
         {phase === "app" && user && (
           <>
             <Nav />
+            {platform.announcement ? (
+              <div className="announce-bar"><Bell size={14} strokeWidth={2.6} /><span>{platform.announcement}</span></div>
+            ) : null}
             <main className="main">
-              {user.type === "client" ? <ClientHome /> : <WorkerHome />}
-              {view === "settings" && <SettingsScreen />}
+              {view === "admin" && user.isAdmin ? (
+                <AdminScreen />
+              ) : (
+                <>
+                  {user.type === "client" ? <ClientHome /> : <WorkerHome />}
+                  {view === "settings" && <SettingsScreen />}
+                </>
+              )}
             </main>
           </>
         )}
@@ -2879,6 +3030,14 @@ em{font-style:normal;color:var(--primary)}
 .loc-btn:active{transform:translateY(1px)}
 .loc-btn:disabled{opacity:.5;cursor:default}
 .pay-note{font-size:12px;color:var(--muted);text-align:center;margin:8px 0 0}
+.announce-bar{max-width:1144px;margin:12px auto 0;width:calc(100% - 32px);display:flex;gap:9px;align-items:center;background:var(--gold-l);border:1px solid #3a2a0e;color:var(--gold);font-size:13px;font-weight:600;padding:10px 14px;border-radius:12px;line-height:1.4;position:relative;z-index:2}
+.announce-bar svg{flex:0 0 auto}
+.net-hint{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mint);margin:-2px 0 6px;font-weight:600}
+.net-hint svg{flex:0 0 auto}
+.admin-preview{display:flex;gap:7px;align-items:center;margin:8px 0 0;padding:9px 11px;border-radius:11px;background:rgba(35,232,155,.10);border:1px solid rgba(35,232,155,.28);color:var(--ink2);font-size:12.5px;line-height:1.4}
+.admin-preview svg{flex:0 0 auto;color:var(--mint)}
+.admin-preview strong{color:var(--mint)}
+.pm-admin svg{color:var(--gold)}
 .refund-note{display:flex;gap:8px;align-items:flex-start;margin:12px 0 2px;padding:10px 12px;border-radius:12px;background:rgba(35,232,155,.10);border:1px solid rgba(35,232,155,.30);color:var(--ink2);font-size:12.5px;line-height:1.45}
 .refund-note svg{flex:0 0 auto;margin-top:1px;color:var(--mint)}
 .refund-note strong{color:var(--mint);font-weight:700}
