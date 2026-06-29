@@ -145,6 +145,7 @@ function rowToProfile(r) {
     stripeAccountId: r.stripe_account_id || null,
     payoutsEnabled: !!r.payouts_enabled,
     paidOut: Number(r.paid_out) || 0,
+    lastCashoutAt: Number(r.last_cashout_at) || 0,
     isAdmin: !!r.is_admin,
   };
 }
@@ -201,7 +202,7 @@ const DEFAULT_PLATFORM = {
   maxAccounts: 0, signupsEnabled: true, minPayout: 1, maxPayout: 0,
   commissionPct: 0, maxActiveJobs: 0, postingEnabled: true,
   payoutsEnabled: true, minCashout: 0, announcement: "",
-  messageRetentionDays: 7,
+  messageRetentionDays: 7, cashoutIntervalDays: 14,
 };
 function rowToPlatform(r) {
   if (!r) return DEFAULT_PLATFORM;
@@ -217,6 +218,7 @@ function rowToPlatform(r) {
     minCashout: Number(r.min_cashout) || 0,
     announcement: r.announcement || "",
     messageRetentionDays: r.message_retention_days == null ? 7 : Math.max(0, Math.round(Number(r.message_retention_days) || 0)),
+    cashoutIntervalDays: r.cashout_interval_days == null ? 14 : Math.max(0, Math.round(Number(r.cashout_interval_days) || 0)),
   };
 }
 function platformPatchToRow(p) {
@@ -232,6 +234,7 @@ function platformPatchToRow(p) {
   if ("minCashout" in p) r.min_cashout = Math.max(0, Number(p.minCashout) || 0);
   if ("announcement" in p) r.announcement = String(p.announcement || "");
   if ("messageRetentionDays" in p) r.message_retention_days = Math.max(0, Math.round(Number(p.messageRetentionDays) || 0));
+  if ("cashoutIntervalDays" in p) r.cashout_interval_days = Math.max(0, Math.round(Number(p.cashoutIntervalDays) || 0));
   r.updated_at = new Date().toISOString();
   return r;
 }
@@ -1870,6 +1873,12 @@ function SettingsScreen() {
   // worker sees the fee before they confirm. The server is the source of truth.
   const instantFee = Math.max(0.5, Math.round(available * 0.01 * 100) / 100);
   const instantNet = Math.max(0, Math.round((available - instantFee) * 100) / 100);
+  // Cash-out cadence (once every N days). The first cash-out is always allowed.
+  const cashoutInterval = Math.max(0, platform.cashoutIntervalDays || 0);
+  const nextCashoutAt = (user.lastCashoutAt || 0) + cashoutInterval * 86400000;
+  const inCooldown = cashoutInterval > 0 && (user.lastCashoutAt || 0) > 0 && Date.now() < nextCashoutAt;
+  const neverCashed = !(user.lastCashoutAt > 0);
+  const fmtDay = ts => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const canNotify = ("Notification" in window) && Notification.permission === "granted";
   const notifBlocked = ("Notification" in window) && Notification.permission === "denied";
 
@@ -2090,19 +2099,44 @@ function SettingsScreen() {
             </>
           ) : (
             <>
-              <Btn variant="success" icon={DollarSign} onClick={() => cashOut(false)} disabled={busyPay || available <= 0}>
-                {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
-              </Btn>
-              {available > 0 && (
-                <button className="instant-btn" onClick={() => cashOut(true)} disabled={busyPay}>
-                  <span className="instant-l"><Zap size={15} strokeWidth={2.6} /> Instant cash out</span>
-                  <span className="instant-r">get {money(instantNet)} now · {money(instantFee)} fee</span>
-                </button>
+              {inCooldown ? (
+                <div className="cooldown-box">
+                  <Clock size={15} strokeWidth={2.5} />
+                  <div>
+                    <strong>Next cash-out: {fmtDay(nextCashoutAt)}</strong>
+                    <div className="cooldown-sub">Cash-outs run once every {cashoutInterval} days. {available > 0 ? `${money(available)} is waiting and will be ready then.` : ""}</div>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <Btn variant="success" icon={DollarSign} onClick={() => cashOut(false)} disabled={busyPay || available <= 0}>
+                    {busyPay ? "Processing…" : available > 0 ? `Cash out ${money(available)}` : "Nothing to cash out yet"}
+                  </Btn>
+                  {available > 0 && (
+                    <button className="instant-btn" onClick={() => cashOut(true)} disabled={busyPay}>
+                      <span className="instant-l"><Zap size={15} strokeWidth={2.6} /> Instant cash out</span>
+                      <span className="instant-r">get {money(instantNet)} now · {money(instantFee)} fee</span>
+                    </button>
+                  )}
+                </>
               )}
+              {neverCashed && available > 0 && !inCooldown && (
+                <p className="auth-fine">Heads up: your <em>first</em> cash-out clears once your earliest quest payments settle with Stripe — usually a few days, and new accounts can take up to ~2 weeks. If it says funds are still settling, give it a day and try again.</p>
+              )}
+              <label className="autopay-row">
+                <div className="autopay-l">
+                  <RefreshCw size={15} strokeWidth={2.5} />
+                  <div>
+                    <div className="autopay-t">Auto cash out{cashoutInterval > 0 ? ` every ${cashoutInterval} days` : ""}</div>
+                    <div className="autopay-h">We'll send your balance to your bank on schedule — no need to remember.</div>
+                  </div>
+                </div>
+                <Toggle on={s.autoPayout === true} onChange={v => set(v ? { autoPayout: true, autoPayoutSince: Date.now() } : { autoPayout: false })} />
+              </label>
               <div className="payout-info">
                 <div className="pi-row"><Check size={13} strokeWidth={3} /> <span><strong>Standard (free):</strong> your earnings move to your Stripe account and deposit to your bank on their own.</span></div>
                 <div className="pi-row"><Zap size={13} /> <span><strong>Instant (small fee):</strong> goes to your debit card, usually within ~30 minutes. You'll need a debit card added in payout settings.</span></div>
-                <div className="pi-row"><Clock size={13} /> <span>Your <em>first</em> standard payout can take ~7–14 days while Stripe verifies you; after that, about 2 business days. Exact timing is set by Stripe and your bank.</span></div>
+                <div className="pi-row"><Clock size={13} /> <span>You can cash out once every {cashoutInterval || "—"} days. Your <em>first</em> standard payout can take ~7–14 days while Stripe verifies you; after that, about 2 business days.</span></div>
               </div>
               <p className="auth-fine"><button className="linklike" onClick={openPayoutDashboard}>Manage payout account / add debit card</button></p>
             </>
@@ -3103,6 +3137,9 @@ function AdminScreen() {
         <h2 className="set-h"><TrendingUp size={17} /> Payouts</h2>
         <label className="field"><span className="field-label">Minimum balance to cash out ($)</span>
           <input className="field-input" type="number" min="0" value={f.minCashout} onChange={e => num("minCashout", e.target.value)} /></label>
+        <label className="field"><span className="field-label">Cash out at most once every (days)</span>
+          <input className="field-input" type="number" min="0" step="1" value={f.cashoutIntervalDays} onChange={e => num("cashoutIntervalDays", e.target.value)} />
+          <span className="field-hint">Questers can cash out once per this many days (0 = no limit). This also stops them trying before funds have settled. Auto cash-out follows the same schedule.</span></label>
         <Toggle icon={TrendingUp} label="Allow quester cashouts" hint="Turn off to pause withdrawals" on={f.payoutsEnabled} onChange={v => set("payoutsEnabled", v)} />
       </div>
 
@@ -3941,11 +3978,35 @@ function App() {
     /* eslint-disable-next-line */
   }, [phase, user && user.id, user && user.isAdmin]);
 
+  // Auto cash-out: if a quester has it on and the cadence has elapsed, send their
+  // balance to the bank automatically on app load. A failed attempt (funds still
+  // settling) is throttled to once a day so it doesn't spam Stripe.
+  useEffect(() => {
+    if (phase !== "app" || !user || user.type !== "worker" || !PAYMENTS_ENABLED) return;
+    const s = user.settings || {};
+    if (s.autoPayout !== true || !user.payoutsEnabled || !platform.payoutsEnabled) return;
+    const avail = Math.max(0, (user.totalEarned || 0) - (user.paidOut || 0));
+    if (avail <= 0) return;
+    const interval = Math.max(0, platform.cashoutIntervalDays || 0);
+    const baseline = Math.max(user.lastCashoutAt || 0, s.autoPayoutSince || 0);
+    if (interval > 0 && Date.now() < baseline + interval * 86400000) return;
+    let key, today;
+    try {
+      key = "sq_autopay_" + user.id; today = new Date().toDateString();
+      if (localStorage.getItem(key) === today) return;
+      localStorage.setItem(key, today);
+    } catch (e) { /* storage blocked — proceed once */ }
+    (async () => {
+      try {
+        const r = await callFn("stripe-connect", { action: "payout", auto: true });
+        if (r && r.ok && !r.fellBack) toast(`Auto cashed out ${money(r.amount || avail)} 🎉`, "success");
+        await refreshProfile();
+      } catch (e) { /* settling or not ready — it'll retry another day */ }
+    })();
+    /* eslint-disable-next-line */
+  }, [phase, user && user.id]);
 
-  // its deadline. Shows a toast (when the app is in view) and a system
-  // notification (when it's backgrounded). Each reminder fires once, tracked in
-  // localStorage. For reminders when the app is fully CLOSED, deploy the
-  // optional send-reminders function (see schema.sql).
+
   useEffect(() => {
     if (phase !== "app" || !user || user.type !== "worker") return;
     const key = "sq_rem_" + user.id;
@@ -4374,6 +4435,16 @@ em{font-style:normal;color:var(--primary)}
 .instant-l{display:inline-flex;align-items:center;gap:7px;font-weight:800;font-size:14px;color:var(--mint)}
 .instant-l svg{color:var(--mint)}
 .instant-r{font-size:12px;color:var(--muted);font-weight:600;text-align:right}
+/* cash-out cadence + autopay */
+.cooldown-box{display:flex;gap:11px;align-items:flex-start;background:var(--card2);border:1px solid var(--line2);border-radius:13px;padding:13px 15px}
+.cooldown-box>svg{flex:none;margin-top:1px;color:var(--gold)}
+.cooldown-box strong{color:var(--ink);font-weight:800;font-family:var(--disp);font-size:15px}
+.cooldown-sub{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.45}
+.autopay-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:11px;padding:11px 13px;background:var(--card2);border:1px solid var(--line);border-radius:13px;cursor:pointer}
+.autopay-l{display:flex;gap:10px;align-items:flex-start;min-width:0}
+.autopay-l>svg{flex:none;margin-top:2px;color:var(--mint)}
+.autopay-t{font-weight:700;font-size:14px;color:var(--ink);font-family:var(--disp)}
+.autopay-h{font-size:12px;color:var(--muted);line-height:1.4;margin-top:1px}
 
 /* tipping */
 .tip-box{margin-top:11px;border-top:1px solid var(--line);padding-top:11px}
