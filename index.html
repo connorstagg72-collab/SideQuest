@@ -166,6 +166,7 @@ function rowToJob(r) {
     submittedAt: r.submitted_at != null ? Number(r.submitted_at) : null,
     refundedAt: r.refunded_at != null ? Number(r.refunded_at) : null,
     paid: !!r.paid,
+    cancelRequested: !!r.cancel_requested,
   };
 }
 function rowToMsg(r) {
@@ -654,9 +655,9 @@ function Bar({ value, tone = "primary", height = 10 }) {
   return <div className="bar" style={{ height }}><div className={`bar-fill bar-${tone}`} style={{ width: Math.max(0, Math.min(100, value)) + "%" }} /></div>;
 }
 function StatusBadge({ status }) {
-  const map = { open: ["Open", "open"], claimed: ["Claimed", "claimed"], submitted: ["In review", "review"], completed: ["Done", "done"], expired: ["Refunded", "refunded"] };
+  const map = { open: ["Open", "open"], claimed: ["Claimed", "claimed"], submitted: ["In review", "review"], completed: ["Done", "done"], expired: ["Refunded", "refunded"], canceled: ["Canceled", "refunded"] };
   const [t, c] = map[status] || ["", ""];
-  return <span className={`sbadge sbadge-${c}`}>{status === "completed" && <Check size={12} strokeWidth={3} />}{status === "expired" && <ShieldCheck size={12} strokeWidth={2.6} />}{t}</span>;
+  return <span className={`sbadge sbadge-${c}`}>{status === "completed" && <Check size={12} strokeWidth={3} />}{(status === "expired" || status === "canceled") && <ShieldCheck size={12} strokeWidth={2.6} />}{t}</span>;
 }
 function Countdown({ to, size = 14 }) {
   const { now } = useApp();
@@ -1069,7 +1070,7 @@ function PostQuestForm() {
   );
 }
 function ClientJobCard({ job }) {
-  const { deleteJob, approveJob, requestChanges } = useApp();
+  const { deleteJob, cancelJob, approveJob, requestChanges } = useApp();
   const [reviewing, setReviewing] = useState(false);
   const [rnote, setRnote] = useState("");
   return (
@@ -1125,6 +1126,17 @@ function ClientJobCard({ job }) {
           <ShieldCheck size={14} /> Deadline passed without completion — {job.refundedAt ? `refunded ${money(job.payout)} to your card.` : `your ${money(job.payout)} refund is on its way to your card.`}
         </div>
       )}
+      {job.status === "canceled" && (
+        <div className="claim-strip refund-strip">
+          <ShieldCheck size={14} /> Canceled — {job.refundedAt ? `refunded ${money(job.payout)} to your card.` : `your ${money(job.payout)} refund is on its way.`}
+        </div>
+      )}
+      {(job.status === "claimed" || job.status === "submitted") && job.cancelRequested && (
+        <div className="note-strip">
+          <Clock size={13} />
+          <span><strong>Cancellation requested.</strong> Waiting for {job.claimedByName || "your quester"} to approve. If they've already done the work, they may submit it for payment instead.</span>
+        </div>
+      )}
       {(job.status === "claimed" || job.status === "submitted" || job.status === "completed") && <JobChat job={job} />}
       {job.status === "open" && job.releaseNote && (
         <div className="note-strip">
@@ -1134,7 +1146,12 @@ function ClientJobCard({ job }) {
       )}
       {job.status === "open" && (
         <div className="jc-actions">
-          <Btn variant="ghostdanger" size="sm" icon={Trash2} onClick={() => deleteJob(job.id)}>Remove</Btn>
+          <Btn variant="ghostdanger" size="sm" icon={Trash2} onClick={() => (PAYMENTS_ENABLED ? cancelJob(job.id) : deleteJob(job.id))}>{PAYMENTS_ENABLED ? `Cancel & refund ${money(job.payout)}` : "Remove"}</Btn>
+        </div>
+      )}
+      {(job.status === "claimed" || job.status === "submitted") && !job.cancelRequested && (
+        <div className="jc-actions">
+          <Btn variant="ghostdanger" size="sm" icon={X} onClick={() => cancelJob(job.id)}>Cancel quest</Btn>
         </div>
       )}
     </div>
@@ -1251,7 +1268,7 @@ function BrowseCard({ job, distance }) {
   );
 }
 function TaskCard({ job }) {
-  const { setSteps, submitJob, setFocusJob, releaseJob, toast } = useApp();
+  const { setSteps, submitJob, setFocusJob, releaseJob, toast, approveCancellation, declineCancellation } = useApp();
   const [newStep, setNewStep] = useState("");
   const [giveUp, setGiveUp] = useState(false);
   const [reason, setReason] = useState("Something came up");
@@ -1299,6 +1316,17 @@ function TaskCard({ job }) {
   };
   const removeStep = id => { play("toggle"); setSteps(job.id, steps.filter(s => s.id !== id)); };
 
+  const cancelBanner = job.cancelRequested ? (
+    <div className="cancel-banner">
+      <div className="cancel-banner-t"><Bell size={14} /> <strong>The client asked to cancel this quest.</strong></div>
+      <p className="cancel-banner-p">Haven't done it yet? Approve to release it and refund them. Already did the work? Submit your proof below for payment instead.</p>
+      <div className="review-actions">
+        <Btn variant="ghost" size="sm" onClick={() => declineCancellation(job.id)}>Keep it</Btn>
+        <Btn variant="success" size="sm" icon={Check} onClick={() => approveCancellation(job.id)} sound="toggle">Approve cancellation</Btn>
+      </div>
+    </div>
+  ) : null;
+
   if (submitted) {
     return (
       <div className="card jobcard task-card">
@@ -1308,6 +1336,7 @@ function TaskCard({ job }) {
         </div>
         <h3 className="jc-title">{job.title}</h3>
         <div className="claim-strip review-wait"><Clock size={14} /> Submitted — waiting for <strong>{job.postedByName}</strong> to review your work and release {money(job.payout)}.</div>
+        {cancelBanner}
         <div className="field-label" style={{ marginTop: 4 }}>Photos you submitted</div>
         <ProofGallery paths={job.proofImages} />
         <JobChat job={job} />
@@ -1335,6 +1364,7 @@ function TaskCard({ job }) {
           <span><strong>Client asked for changes:</strong> “{job.reviewNote}” — update your photos and resubmit.</span>
         </div>
       )}
+      {cancelBanner}
 
       <div className="steps-head">
         <span><ListChecks size={15} /> Micro-steps</span>
@@ -2359,6 +2389,53 @@ function App() {
     if (error) { setJobs(snapshot); toast("Couldn't remove that quest.", "error"); return; }
     toast("Quest removed.", "info");
   }
+  // Client calls off a quest. Open → instant refund. Claimed/submitted → the
+  // request goes to the quester to approve (in case they already did the work).
+  async function cancelJob(id) {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    play("toggle");
+    try {
+      const res = await callFn("cancel-job", { jobId: id });
+      if (res && res.canceled) {
+        setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "canceled", refundedAt: Date.now(), cancelRequested: false } : j));
+        toast(PAYMENTS_ENABLED ? `Quest canceled — ${money(job.payout)} refunded to your card.` : "Quest canceled.", "success");
+      } else if (res && res.requested) {
+        setJobs(prev => prev.map(j => j.id === id ? { ...j, cancelRequested: true } : j));
+        toast("Cancellation request sent to your quester.", "info");
+        sendPush(job.claimedBy, "Cancellation requested", `The client asked to cancel “${job.title}”.`);
+      }
+      reloadJobs();
+    } catch (e) { toast(e.message || "Couldn't cancel that quest.", "error"); }
+  }
+  // Quester agrees to the client's cancellation → client is refunded.
+  async function approveCancellation(id) {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    play("toggle");
+    try {
+      const res = await callFn("cancel-job", { jobId: id, action: "approve" });
+      if (res && res.canceled) {
+        setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "canceled", cancelRequested: false } : j));
+        toast("Cancellation approved — the client was refunded.", "success");
+        sendPush(job.postedBy, "Cancellation approved", `“${job.title}” was canceled and you were refunded.`);
+      }
+      reloadJobs();
+    } catch (e) { toast(e.message || "Couldn't approve that.", "error"); }
+  }
+  // Quester keeps the quest (e.g. they've done/are doing the work).
+  async function declineCancellation(id) {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    play("toggle");
+    try {
+      await callFn("cancel-job", { jobId: id, action: "decline" });
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, cancelRequested: false } : j));
+      toast("Kept the quest — finish up and submit your proof.", "info");
+      sendPush(job.postedBy, "Quester is keeping the quest", `Your quester is finishing “${job.title}” rather than canceling.`);
+      reloadJobs();
+    } catch (e) { toast(e.message || "Couldn't update that.", "error"); }
+  }
   async function claimJob(id, scheduledTime) {
     const job = jobs.find(j => j.id === id);
     if (!job) return;
@@ -2556,6 +2633,7 @@ function App() {
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
     setHomeLocation, refreshProfile, releaseJob, switchMode,
     msgNotifs, refreshMsgNotifs, markMsgsSeen,
+    cancelJob, approveCancellation, declineCancellation,
   };
 
   return (
@@ -2994,6 +3072,10 @@ em{font-style:normal;color:var(--primary)}
 .claim-strip{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--cyan);background:var(--cyan-l);padding:9px 13px;border-radius:11px;font-weight:600;margin-top:2px;border:1px solid #0c3d49}
 .done-strip{color:var(--mint);background:var(--mint-l);border-color:#103f2e}
 .refund-strip{color:var(--mint);background:var(--mint-l);border-color:#103f2e}
+.cancel-banner{margin-top:4px;padding:11px 13px;border-radius:13px;background:var(--gold-l);border:1px solid #3a2a0e;animation:rise .25s}
+.cancel-banner-t{display:flex;gap:7px;align-items:center;color:var(--gold);font-size:13px;font-weight:700}
+.cancel-banner-t svg{flex:0 0 auto}
+.cancel-banner-p{margin:6px 0 9px;font-size:12px;color:var(--ink2);line-height:1.45}
 .claim-strip strong{font-weight:800}
 .jc-actions{margin-top:4px;display:flex;justify-content:flex-end}
 
