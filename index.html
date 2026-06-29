@@ -2365,6 +2365,9 @@ function App() {
     const o = opts || {};
     const job = jobs.find(j => j.id === id);
     if (!job) return;
+    // Notify the poster *before* we clear the claim, so the push guard still
+    // sees the worker↔poster link on the quest.
+    sendPush(job.postedBy, "Quest came back", `“${job.title}” was released — it's back on your board.`);
     const patch = {
       status: "open", claimedBy: null, claimedByName: "",
       scheduledTime: null, steps: [],
@@ -2479,6 +2482,9 @@ function App() {
       } else if (j.postedBy === user.id && j.status === "claimed" && p.status === "open") {
         toast(`${j.claimedByName || "Someone"} claimed “${j.title}”.`, "info");
         pushNote("Quest claimed", `${j.claimedByName || "Someone"} claimed “${j.title}”.`);
+      } else if (j.postedBy === user.id && j.status === "open" && p.status === "claimed") {
+        toast(`“${j.title}” came back — your quester couldn't finish it.`, "info");
+        pushNote("Quest came back", `“${j.title}” was released — it's back on your board.`);
       }
     });
     /* eslint-disable-next-line */
