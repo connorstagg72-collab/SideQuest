@@ -68,8 +68,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical","Users","Hash"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical, Users, Hash } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -657,11 +657,6 @@ const FOCUS_LINES = [
   "This is you, focusing. Proud of you.",
 ];
 
-/* ---------- demo accounts (provisioned on first use via Supabase Auth) ---------- */
-const DEMO_CLIENT = { email: "demo@client.com", name: "Bright Builds Co." };
-const DEMO_WORKER = { email: "demo@worker.com", name: "Alex Rivera" };
-const DEMO_PASSWORD = "demo123";
-
 /* ============================================================
    App context
    ============================================================ */
@@ -893,7 +888,7 @@ function FeatureRow({ icon: Icon, title, body }) {
   );
 }
 function AuthScreen() {
-  const { signup, login, demoLogin } = useApp();
+  const { signup, login } = useApp();
   const [role, setRole] = useState("worker");
   const [mode, setMode] = useState("login");
   const [name, setName] = useState("");
@@ -919,14 +914,6 @@ function AuthScreen() {
     setBusy(false);
     if (!r.ok) fail(r.error);
   }
-  const runDemo = async which => {
-    if (busy) return;
-    setErr(""); play("toggle"); setRole(which); setMode("login");
-    setBusy(true);
-    const r = await demoLogin(which);
-    setBusy(false);
-    if (!r.ok) fail(r.error);
-  };
 
   return (
     <div className="auth">
@@ -985,11 +972,6 @@ function AuthScreen() {
           </Btn>
         </div>
 
-        <div className="demo-row">
-          <span>Just exploring?</span>
-          <button disabled={busy} onClick={() => runDemo("client")}>Demo client</button>
-          <button disabled={busy} onClick={() => runDemo("worker")}>Demo worker</button>
-        </div>
         <p className="auth-fine">Accounts and quests are saved securely to your Supabase backend.</p>
       </div>
     </div>
@@ -2082,7 +2064,7 @@ function SettingsScreen() {
 function loadIdSet(key) { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); } }
 function saveIdSet(key, set) { try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) {} }
 function ProfileMenu() {
-  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode, supportUnread } = useApp();
+  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode, supportUnread, adminChatUnread } = useApp();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const isClient = user.type === "client";
@@ -2210,6 +2192,12 @@ function ProfileMenu() {
                 <ShieldCheck size={15} strokeWidth={2.3} /><span>Admin controls</span>
               </button>
             )}
+            {user.isAdmin && (
+              <button className="pm-link pm-admin" onClick={() => go("adminchat")}>
+                <MessageSquare size={15} strokeWidth={2.3} /><span>Admin chat</span>
+                {adminChatUnread > 0 && <span className="pm-link-badge">{adminChatUnread > 9 ? "9+" : adminChatUnread}</span>}
+              </button>
+            )}
             <button className="pm-link" onClick={() => go("support")}>
               <LifeBuoy size={15} strokeWidth={2.3} />
               <span>{user.isAdmin ? "Support inbox" : "Help & support"}</span>
@@ -2258,8 +2246,8 @@ function Nav() {
 function ConfigScreen() {
   const steps = [
     ["Create a Supabase project", "Go to supabase.com → New project. Pick a name, a strong database password, and a region near you."],
-    ["Run the database schema", "Open the SQL Editor, paste the contents of schema.sql (included alongside this file), and click Run. This creates the tables, security rules, and demo quests."],
-    ["Turn off email confirmation", "Authentication → Providers → Email → turn OFF “Confirm email”. This lets the Demo buttons and instant sign-up work."],
+    ["Run the database schema", "Open the SQL Editor, paste the contents of schema.sql (included alongside this file), and click Run. This creates the tables and security rules."],
+    ["Turn off email confirmation", "Authentication → Providers → Email → turn OFF “Confirm email”. This lets instant sign-up work."],
     ["Copy your API keys", "Project Settings → API. Copy the Project URL and the anon / public key."],
     ["Paste them into the app", "Open sidequest.html in a text editor, set SUPABASE_URL and SUPABASE_ANON_KEY near the top, save, then reload this page."],
   ];
@@ -3043,6 +3031,256 @@ function AdminScreen() {
 }
 
 /* ============================================================
+   ADMIN CHAT — private messaging between admins
+   (one "All admins" room, custom groups, and 1:1 DMs)
+   ============================================================ */
+function AdminChat() {
+  const { user, listAdmins, adminChannelList, adminCreateGroup, adminOpenDM, refreshAdminChatUnread, toast } = useApp();
+  const [channels, setChannels] = useState([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [sel, setSel] = useState(null);            // open channel
+  const [msgs, setMsgs] = useState([]);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [text, setText] = useState("");
+  const [compose, setCompose] = useState(null);    // null | "group" | "dm"
+  const [admins, setAdmins] = useState([]);
+  const [loadingAdmins, setLoadingAdmins] = useState(false);
+  const [picked, setPicked] = useState([]);        // admin ids picked for a group
+  const [groupName, setGroupName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const endRef = useRef(null);
+  const selRef = useRef(null);
+  useEffect(() => { selRef.current = sel; }, [sel]);
+
+  async function loadList() {
+    try { const data = await adminChannelList(); setChannels(data || []); }
+    catch (e) { toast(e.message || "Couldn't load channels.", "error"); }
+    finally { setLoadingList(false); }
+  }
+  async function markRead(channelId) {
+    try {
+      await supabase.from("admin_channel_reads")
+        .upsert({ channel_id: channelId, user_id: user.id, last_read_at: Date.now() }, { onConflict: "channel_id,user_id" });
+      refreshAdminChatUnread();
+    } catch (e) { /* ignore */ }
+  }
+  async function openChannel(c) {
+    setCompose(null); setSel(c); setLoadingMsgs(true); setMsgs([]);
+    const { data } = await supabase.from("admin_messages").select("*")
+      .eq("channel_id", c.channel_id).order("created_at", { ascending: true });
+    setMsgs(data || []);
+    setLoadingMsgs(false);
+    markRead(c.channel_id);
+    loadList();
+  }
+  async function openById(channelId) {
+    try {
+      const data = await adminChannelList();
+      setChannels(data || []);
+      const c = (data || []).find(x => x.channel_id === channelId);
+      if (c) openChannel(c);
+    } catch (e) { /* ignore */ }
+  }
+
+  useEffect(() => { loadList(); refreshAdminChatUnread(); /* eslint-disable-next-line */ }, []);
+
+  // Live updates: append to the open thread + refresh the list on any new message.
+  useEffect(() => {
+    if (!(CONFIGURED && ENABLE_REALTIME)) return;
+    const ch = supabase.channel("adminchat-stream-" + user.id)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "admin_messages" }, payload => {
+        const m = payload.new;
+        const cur = selRef.current;
+        if (cur && m.channel_id === cur.channel_id) {
+          setMsgs(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]);
+          if (m.sender_id !== user.id) markRead(cur.channel_id);
+        }
+        loadList();
+      })
+      .subscribe();
+    return () => { try { supabase.removeChannel(ch); } catch (e) {} };
+    /* eslint-disable-next-line */
+  }, [user.id]);
+
+  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs]);
+
+  async function send() {
+    const body = text.trim();
+    if (!body || !sel || busy) return;
+    setText("");
+    const row = { channel_id: sel.channel_id, sender_id: user.id, sender_name: user.name, body, created_at: Date.now() };
+    const { data, error } = await supabase.from("admin_messages").insert(row).select().single();
+    if (error) { toast("Message didn't send — try again.", "error"); setText(body); return; }
+    if (data) setMsgs(prev => prev.some(x => x.id === data.id) ? prev : [...prev, data]);
+    play("click");
+    markRead(sel.channel_id);
+    loadList();
+  }
+
+  async function startCompose(kind) {
+    setCompose(kind); setPicked([]); setGroupName(""); setSel(null);
+    setLoadingAdmins(true);
+    try { const a = await listAdmins(); setAdmins((a || []).filter(x => x.id !== user.id)); }
+    catch (e) { toast(e.message || "Couldn't load admins.", "error"); }
+    finally { setLoadingAdmins(false); }
+  }
+  function togglePick(id) {
+    setPicked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+  async function createGroup() {
+    if (busy) return;
+    if (picked.length === 0) { toast("Pick at least one admin for the group.", "info"); return; }
+    setBusy(true);
+    try { const id = await adminCreateGroup(groupName.trim(), picked); setCompose(null); await openById(id); }
+    catch (e) { toast(e.message || "Couldn't create the group.", "error"); }
+    finally { setBusy(false); }
+  }
+  async function startDM(otherId) {
+    if (busy) return;
+    setBusy(true);
+    try { const id = await adminOpenDM(otherId); setCompose(null); await openById(id); }
+    catch (e) { toast(e.message || "Couldn't open that chat.", "error"); }
+    finally { setBusy(false); }
+  }
+
+  const chanIcon = kind => kind === "all" ? Users : kind === "dm" ? User : Hash;
+  const chanName = c => c.kind === "all" ? "All admins" : c.kind === "dm" ? (c.other_names || "Admin") : (c.title || "Group chat");
+  const chanSub = c => c.kind === "all" ? "Everyone with admin access"
+    : c.kind === "group" ? (c.other_names ? "You, " + c.other_names : "Just you") : null;
+
+  // ---------- open thread ----------
+  if (sel) {
+    const Icon = chanIcon(sel.kind);
+    return (
+      <div className="page page-narrow">
+        <header className="page-head"><h1><MessageSquare size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Admin chat</h1></header>
+        <div className="card set-card">
+          <button className="sup-back" onClick={() => { setSel(null); loadList(); }}>
+            <ArrowLeft size={15} strokeWidth={2.4} /> All channels
+          </button>
+          <div className="sup-head">
+            <span className={`ac-ava ${sel.kind}`}><Icon size={18} strokeWidth={2.4} /></span>
+            <div>
+              <div className="sup-name">{chanName(sel)}</div>
+              {chanSub(sel) && <div className="sup-email">{chanSub(sel)}</div>}
+            </div>
+          </div>
+          <div className="support-chat">
+            <div className="chat-msgs support-msgs tall">
+              {loadingMsgs && <div className="chat-empty">Loading…</div>}
+              {!loadingMsgs && msgs.length === 0 && <div className="chat-empty">No messages yet — start the conversation 👋</div>}
+              {msgs.map(m => (
+                <div key={m.id} className={`bubble ${m.sender_id === user.id ? "mine" : ""}`}>
+                  {m.sender_id !== user.id && sel.kind !== "dm" && <span className="bubble-name">{m.sender_name}</span>}
+                  <span className="bubble-text">{m.body}</span>
+                </div>
+              ))}
+              <div ref={endRef} />
+            </div>
+            <div className="chat-input">
+              <input value={text} onChange={e => setText(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && send()} placeholder="Type a message…" maxLength={1000} />
+              <button className="chat-send" onClick={send} aria-label="Send"><Send size={16} strokeWidth={2.4} /></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- compose a new group / DM ----------
+  if (compose === "group" || compose === "dm") {
+    return (
+      <div className="page page-narrow">
+        <header className="page-head"><h1><MessageSquare size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Admin chat</h1></header>
+        <div className="card set-card">
+          <button className="sup-back" onClick={() => setCompose(null)}>
+            <ArrowLeft size={15} strokeWidth={2.4} /> All channels
+          </button>
+          <h2 className="set-h" style={{ marginTop: 4 }}>
+            {compose === "group" ? <><Users size={17} /> New group chat</> : <><User size={17} /> New direct message</>}
+          </h2>
+          {compose === "group" && (
+            <Field label="Group name (optional)" value={groupName} onChange={e => setGroupName(e.target.value)} placeholder="e.g. Moderators" maxLength={60} />
+          )}
+          <p className="set-p">{compose === "group" ? "Add admins to the group:" : "Pick an admin to message:"}</p>
+          {loadingAdmins && <div className="chat-empty">Loading admins…</div>}
+          {!loadingAdmins && admins.length === 0 && (
+            <Empty icon={Users} title="No other admins yet" body="Grant someone admin access in Admin controls, then you can message them here." />
+          )}
+          {!loadingAdmins && admins.length > 0 && (
+            <div className="ac-picklist">
+              {admins.map(a => compose === "group" ? (
+                <button key={a.id} className={`ac-pick ${picked.includes(a.id) ? "on" : ""}`} onClick={() => { togglePick(a.id); play("toggle"); }}>
+                  <span className="ac-pava">{(a.name || a.email || "?")[0].toUpperCase()}</span>
+                  <span className="ac-pmeta">
+                    <span className="ac-pname">{a.name || "Admin"}</span>
+                    <span className="ac-pmail">{a.email}</span>
+                  </span>
+                  <span className={`ac-check ${picked.includes(a.id) ? "on" : ""}`}>{picked.includes(a.id) && <Check size={13} strokeWidth={3} />}</span>
+                </button>
+              ) : (
+                <button key={a.id} className="ac-pick" disabled={busy} onClick={() => startDM(a.id)}>
+                  <span className="ac-pava">{(a.name || a.email || "?")[0].toUpperCase()}</span>
+                  <span className="ac-pmeta">
+                    <span className="ac-pname">{a.name || "Admin"}</span>
+                    <span className="ac-pmail">{a.email}</span>
+                  </span>
+                  <ChevronRight size={16} className="sup-chev" />
+                </button>
+              ))}
+            </div>
+          )}
+          {compose === "group" && !loadingAdmins && admins.length > 0 && (
+            <Btn full size="lg" icon={Check} onClick={createGroup} disabled={busy || picked.length === 0} sound="success">
+              {busy ? "Creating…" : "Create group" + (picked.length ? " (" + picked.length + ")" : "")}
+            </Btn>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- channel list ----------
+  return (
+    <div className="page page-narrow">
+      <header className="page-head"><h1><MessageSquare size={22} strokeWidth={2.5} style={{ verticalAlign: "-3px" }} /> Admin chat</h1><p>Private messaging between admins — the whole team, custom groups, or one-to-one.</p></header>
+
+      <div className="ac-actions">
+        <button className="ac-new" onClick={() => startCompose("group")}><Users size={16} strokeWidth={2.4} /> New group</button>
+        <button className="ac-new" onClick={() => startCompose("dm")}><User size={16} strokeWidth={2.4} /> New DM</button>
+      </div>
+
+      <div className="card set-card">
+        {loadingList && <div className="chat-empty">Loading…</div>}
+        {!loadingList && channels.length === 0 && <Empty icon={MessageSquare} title="No channels yet" body="The “All admins” room appears once the database schema has been run." />}
+        {channels.length > 0 && (
+          <div className="sup-list">
+            {channels.map(c => {
+              const Icon = chanIcon(c.kind);
+              return (
+                <button key={c.channel_id} className="sup-row" onClick={() => openChannel(c)}>
+                  <span className={`ac-ava ${c.kind}`}><Icon size={17} strokeWidth={2.4} /></span>
+                  <span className="sup-meta">
+                    <span className="sup-name">{chanName(c)} {c.unread > 0 && <span className="sup-dot">{c.unread > 9 ? "9+" : c.unread}</span>}</span>
+                    <span className="sup-last">
+                      {c.last_body
+                        ? (c.last_sender ? (c.last_sender === user.name ? "You: " : c.last_sender + ": ") : "") + (c.last_body.length > 50 ? c.last_body.slice(0, 50) + "…" : c.last_body)
+                        : (c.kind === "all" ? "Say hello to the team" : "No messages yet")}
+                    </span>
+                  </span>
+                  <ChevronRight size={16} className="sup-chev" />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    APP
    ============================================================ */
 function App() {
@@ -3058,6 +3296,7 @@ function App() {
   const [msgNotifs, setMsgNotifs] = useState([]);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
   const [supportUnread, setSupportUnread] = useState(0);
+  const [adminChatUnread, setAdminChatUnread] = useState(0);
 
   const reduceMotion = useRef(false);
   useEffect(() => {
@@ -3145,6 +3384,31 @@ function App() {
     return data || [];
   }
 
+  // ---- Admin messaging center (admins only) ----
+  async function refreshAdminChatUnread(u) {
+    const me = u || user;
+    if (!me || !me.isAdmin) { setAdminChatUnread(0); return; }
+    try {
+      const { data } = await supabase.rpc("admin_chat_unread");
+      setAdminChatUnread(typeof data === "number" ? data : 0);
+    } catch (e) { /* ignore */ }
+  }
+  async function adminChannelList() {
+    const { data, error } = await supabase.rpc("admin_channel_list");
+    if (error) throw new Error(error.message || "Couldn't load channels.");
+    return data || [];
+  }
+  async function adminCreateGroup(title, memberIds) {
+    const { data, error } = await supabase.rpc("admin_create_channel", { p_kind: "group", p_title: title || "", p_members: memberIds || [] });
+    if (error) throw new Error(error.message || "Couldn't create that group.");
+    return data; // channel id
+  }
+  async function adminOpenDM(otherId) {
+    const { data, error } = await supabase.rpc("admin_dm_channel", { p_other: otherId });
+    if (error) throw new Error(error.message || "Couldn't open that chat.");
+    return data; // channel id
+  }
+
   // Unread support badge: for an admin it's unread user messages across all
   // threads; for a user it's unread admin replies in their own thread.
   async function refreshSupportUnread(u) {
@@ -3230,25 +3494,6 @@ function App() {
     if (error) return { ok: false, error: friendly(error) };
     const ok = await loadAndEnter(data.user);
     return ok ? { ok: true } : { ok: false, error: "Couldn't load your account. Try again." };
-  }
-  // Demo accounts self-provision on first use (requires “Confirm email” OFF).
-  async function demoLogin(which) {
-    const acct = which === "client" ? DEMO_CLIENT : DEMO_WORKER;
-    const type = which === "client" ? "client" : "worker";
-    const res = await supabase.auth.signInWithPassword({ email: acct.email, password: DEMO_PASSWORD });
-    if (!res.error) {
-      const ok = await loadAndEnter(res.data.user);
-      return ok ? { ok: true } : { ok: false, error: "Couldn't load the demo account. Try again." };
-    }
-    const up = await supabase.auth.signUp({
-      email: acct.email, password: DEMO_PASSWORD, options: { data: { name: acct.name, type } },
-    });
-    if (up.error) return { ok: false, error: friendly(up.error) };
-    if (!up.data.session) {
-      return { ok: false, error: "Demo needs “Confirm email” turned OFF in Supabase (Authentication → Providers → Email)." };
-    }
-    const ok = await loadAndEnter(up.data.user, { name: acct.name, type });
-    return ok ? { ok: true } : { ok: false, error: "Couldn't load the demo account. Try again." };
   }
   async function logout() {
     play("toggle");
@@ -3565,7 +3810,22 @@ function App() {
     /* eslint-disable-next-line */
   }, [phase, user && user.id]);
 
-  // ADHD reminders for questers: nudge before a claimed quest starts, and before
+  // Admin messaging unread badge: only runs for admins. Poll + live updates.
+  useEffect(() => {
+    if (phase !== "app" || !user || !user.isAdmin) { setAdminChatUnread(0); return; }
+    refreshAdminChatUnread();
+    const t = setInterval(() => refreshAdminChatUnread(), 60000);
+    let ch = null;
+    if (CONFIGURED && ENABLE_REALTIME) {
+      ch = supabase.channel("adminchat-badge-" + user.id)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "admin_messages" }, () => refreshAdminChatUnread())
+        .subscribe();
+    }
+    return () => { clearInterval(t); if (ch) { try { supabase.removeChannel(ch); } catch (e) {} } };
+    /* eslint-disable-next-line */
+  }, [phase, user && user.id, user && user.isAdmin]);
+
+
   // its deadline. Shows a toast (when the app is in view) and a system
   // notification (when it's backgrounded). Each reminder fires once, tracked in
   // localStorage. For reminders when the app is fully CLOSED, deploy the
@@ -3666,7 +3926,7 @@ function App() {
 
   const value = {
     user, jobs, view, setView, now, ui, setUi,
-    signup, login, demoLogin, logout, postJob, deleteJob, claimJob, setSteps,
+    signup, login, logout, postJob, deleteJob, claimJob, setSteps,
     submitJob, approveJob, requestChanges,
     saveSettings, setEnergy, toast, refreshJobs, setFocusJob,
     setHomeLocation, refreshProfile, releaseJob, switchMode,
@@ -3675,6 +3935,7 @@ function App() {
     platform, savePlatform, refreshPlatform,
     deleteAccount, setUserAdmin, listAdmins, cityLeaderboard,
     supportUnread, refreshSupportUnread,
+    adminChatUnread, refreshAdminChatUnread, adminChannelList, adminCreateGroup, adminOpenDM,
   };
 
   return (
@@ -3703,6 +3964,8 @@ function App() {
             <main className="main">
               {view === "admin" && user.isAdmin ? (
                 <AdminScreen />
+              ) : view === "adminchat" && user.isAdmin ? (
+                <AdminChat />
               ) : view === "support" ? (
                 <SupportScreen />
               ) : view === "schedule" ? (
@@ -3912,9 +4175,6 @@ em{font-style:normal;color:var(--primary)}
 .auth-fields{display:flex;flex-direction:column;gap:2px}
 .auth-err{display:flex;align-items:center;gap:7px;background:var(--accent-l);color:#ff8ea0;padding:10px 13px;border-radius:11px;font-weight:600;font-size:13.5px;margin:6px 0 12px;border:1px solid #7a1228}
 .auth-err.sm{margin:8px 0;padding:8px 11px;font-size:12.5px}
-.demo-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);font-weight:600}
-.demo-row button{font-weight:700;color:#ff8ea0;background:var(--primary-l);padding:6px 12px;border-radius:9px;font-size:13px;transition:.16s;border:1px solid var(--line2);font-family:var(--disp)}
-.demo-row button:hover{background:#34101a;border-color:var(--primary-d);color:#fff}
 .auth-fine{font-size:12px;color:var(--muted);text-align:center;margin-top:2px}
 .cfg-list{list-style:none;display:flex;flex-direction:column;gap:14px;margin:4px 0 16px;padding:0}
 .cfg-item{display:flex;gap:13px;align-items:flex-start}
@@ -4048,6 +4308,25 @@ em{font-style:normal;color:var(--primary)}
 .sup-back:hover{color:var(--primary)}
 .sup-head{display:flex;align-items:center;gap:11px;margin:8px 0 4px}
 .sup-email{font-size:12.5px;color:var(--muted)}
+/* admin chat */
+.ac-actions{display:flex;gap:9px;margin-bottom:12px}
+.ac-new{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:11px 12px;border-radius:13px;background:var(--card);border:1px solid var(--line);color:var(--ink);font-weight:700;font-size:13.5px;cursor:pointer;transition:.14s;font-family:var(--disp)}
+.ac-new:hover{border-color:var(--primary-d);background:var(--primary-l);color:var(--primary)}
+.ac-ava{flex:none;width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:var(--primary-l);color:var(--primary)}
+.ac-ava.all{background:rgba(110,168,254,.16);color:#6ea8fe}
+.ac-ava.dm{background:rgba(94,234,165,.16);color:#34d399;border-radius:50%}
+.ac-ava.group{background:var(--gold-l,rgba(245,196,82,.16));color:var(--gold)}
+.ac-picklist{display:flex;flex-direction:column;gap:6px;margin:4px 0 12px}
+.ac-pick{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:9px 11px;border-radius:12px;cursor:pointer;transition:.12s;background:var(--card2);border:1px solid var(--line)}
+.ac-pick:hover{border-color:var(--primary-d)}
+.ac-pick.on{border-color:var(--primary);background:var(--primary-l)}
+.ac-pick:disabled{opacity:.6;cursor:default}
+.ac-pava{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--primary-l);color:var(--primary);font-weight:800;font-family:var(--disp)}
+.ac-pmeta{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ac-pname{font-weight:700;font-size:14px;color:var(--ink)}
+.ac-pmail{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ac-check{flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line2);display:grid;place-items:center;color:#fff;transition:.12s}
+.ac-check.on{background:var(--primary);border-color:var(--primary)}
 /* admin access management */
 .grant-row{display:flex;gap:8px;align-items:stretch;margin-top:2px}
 .grant-row .field-input{flex:1}
