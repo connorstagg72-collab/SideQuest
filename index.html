@@ -1873,6 +1873,22 @@ function SettingsScreen() {
   const canNotify = ("Notification" in window) && Notification.permission === "granted";
   const notifBlocked = ("Notification" in window) && Notification.permission === "denied";
 
+  // Ask Stripe directly whether this quester's payout account is ready, so the
+  // cash-out buttons appear as soon as onboarding is done — without waiting on
+  // the account.updated webhook. The 'status' action syncs the DB flag for us.
+  useEffect(() => {
+    if (!PAYMENTS_ENABLED || user.type !== "worker") return;
+    (async () => {
+      try {
+        const r = await callFn("stripe-connect", { action: "status" });
+        if (r && typeof r.payoutsEnabled === "boolean" && r.payoutsEnabled !== !!user.payoutsEnabled) {
+          await refreshProfile();
+        }
+      } catch (e) { /* ignore */ }
+    })();
+    /* eslint-disable-next-line */
+  }, []);
+
   async function toggleDevicePush(on) {
     if (!on) { set({ push: false }); toast("Device notifications off.", "info"); return; }
     if (!("Notification" in window)) { toast("This browser doesn't support notifications.", "info"); return; }
@@ -1918,6 +1934,17 @@ function SettingsScreen() {
       else toast(`Cashed out ${money(r.amount || available)} 🎉`, "success");
       await refreshProfile();
     } catch (e) { toast(e.message || "Cash out failed.", "error"); }
+    setBusyPay(false);
+  }
+  async function checkPayoutStatus() {
+    setBusyPay(true);
+    try {
+      const r = await callFn("stripe-connect", { action: "status" });
+      await refreshProfile();
+      if (r && r.payoutsEnabled) toast("Payouts are ready — you can cash out now! 🎉", "success");
+      else if (r && r.connected) toast("Stripe is still finishing your verification. Check back shortly.", "info");
+      else toast("No payout account yet — tap “Set up payouts with Stripe” first.", "info");
+    } catch (e) { toast(e.message || "Couldn't check your payout status.", "error"); }
     setBusyPay(false);
   }
   async function openPayoutDashboard() {
@@ -2059,6 +2086,7 @@ function SettingsScreen() {
                 {busyPay ? "Opening Stripe…" : "Set up payouts with Stripe"}
               </Btn>
               <p className="auth-fine">You'll link a bank account through Stripe's secure onboarding. Stripe handles identity and bank details — SideQuest never sees them.</p>
+              <p className="auth-fine">Already finished Stripe setup but still see this? <button className="linklike" onClick={checkPayoutStatus} disabled={busyPay}>Refresh status</button></p>
             </>
           ) : (
             <>
@@ -3968,7 +3996,7 @@ function App() {
     let changed = false;
     if (p.get("paid") === "1") { toast("Payment received — your quest is live! 🎉", "success"); reloadJobs(); changed = true; }
     if (p.get("canceled") === "1") { toast("Checkout canceled — quest wasn't posted.", "info"); changed = true; }
-    if (p.get("connect") === "done") { toast("Payouts connected — you can cash out now.", "success"); refreshProfile(); changed = true; }
+    if (p.get("connect") === "done") { toast("Payouts connected — you can cash out now.", "success"); (async () => { try { await callFn("stripe-connect", { action: "status" }); } catch (e) {} refreshProfile(); })(); changed = true; }
     if (p.get("connect") === "refresh") { toast("Almost there — finish your payout setup.", "info"); changed = true; }
     if (p.get("tip") === "1") { toast("Tip sent — thanks for looking after your quester! 💛", "success"); reloadJobs(); changed = true; }
     if (p.get("tipcancel") === "1") { toast("Tip canceled — no charge made.", "info"); changed = true; }
