@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.adhdsidequests.twa",
+        "sha256_cert_fingerprints": ["C1:C6:2B:1A:8A:76:1C:D9:16:24:20:B4:C5:AA:F9:BB:89:1E:3D:B6:7A:3E:C8:C9:2E:66:49:24:DE:09:B5:7E"]
+      }
+    }]
