@@ -1790,9 +1790,9 @@ function WorkerHome() {
             <Bar value={pct} tone="primary" height={12} />
           </div>
         </div>
+        {PAYMENTS_ENABLED && <PayoutPanel />}
         <div className="rewards-grid">{rewards.map((r, i) => <RewardCard key={i} {...r} />)}</div>
         <CityScoreboard />
-        <PayoutHint />
       </div>
     );
   }
