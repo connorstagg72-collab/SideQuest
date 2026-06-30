@@ -1992,7 +1992,7 @@ function PayoutPanel({ compact }) {
     }
     setBusyPay(true);
     try {
-      const r = await callFn("stripe-connect", { action: "payout", instant: !!instant });
+      const r = await callFn("stripe-connect", { action: "payout", instant: !!instant, nonce: genId() });
       if (r.fellBack) toast(r.message || "Sent via standard payout instead.", "info");
       else if (r.instant) toast(`Sent ${money(r.amount)} to your bank — arrives in ~30 min ⚡`, "success");
       else toast(`Cashed out ${money(r.amount || available)} 🎉`, "success");
@@ -4122,7 +4122,7 @@ function App() {
     } catch (e) { /* storage blocked — proceed once */ }
     (async () => {
       try {
-        const r = await callFn("stripe-connect", { action: "payout", auto: true });
+        const r = await callFn("stripe-connect", { action: "payout", auto: true, nonce: genId() });
         if (r && r.ok && !r.fellBack) toast(`Auto cashed out ${money(r.amount || avail)} 🎉`, "success");
         await refreshProfile();
       } catch (e) { /* settling or not ready — it'll retry another day */ }
