@@ -68,8 +68,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical","Users","Hash","Smartphone","ArrowDownUp"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical, Users, Hash, Smartphone, ArrowDownUp } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical","Users","Hash","Smartphone","ArrowDownUp","MoreVertical","Flag","UserCheck","Bug"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical, Users, Hash, Smartphone, ArrowDownUp, MoreVertical, Flag, UserCheck, Bug } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -1199,6 +1199,7 @@ function ClientJobCard({ job }) {
       <div className="jc-top">
         <span className="cat-tag">{job.category}</span>
         <StatusBadge status={job.status} />
+        {job.claimedBy && <ReportBlock userId={job.claimedBy} userName={job.claimedByName} />}
       </div>
       <h3 className="jc-title">{job.title}</h3>
       {job.desc && <p className="jc-desc">{job.desc}</p>}
@@ -1466,6 +1467,7 @@ function TaskCard({ job }) {
         <div className="jc-top">
           <span className="cat-tag">{job.category}</span>
           <StatusBadge status="submitted" />
+          <ReportBlock userId={job.postedBy} userName={job.postedByName} />
         </div>
         <h3 className="jc-title">{job.title}</h3>
         <div className="claim-strip review-wait"><Clock size={14} /> Submitted — waiting for <strong>{job.postedByName}</strong> to review your work and release {money(net)} to you{hasFee ? ` (after the ${platform.commissionPct}% fee)` : ""}.</div>
@@ -1482,6 +1484,7 @@ function TaskCard({ job }) {
       <div className="jc-top">
         <span className="cat-tag">{job.category}</span>
         <span className="payout">{money(job.payout)}</span>
+        <ReportBlock userId={job.postedBy} userName={job.postedByName} />
       </div>
       <h3 className="jc-title">{job.title}</h3>
       {hasFee && (
@@ -1619,6 +1622,79 @@ function ProofGallery({ paths }) {
     </div>
   );
 }
+const REPORT_REASONS = ["Harassment or abuse", "Didn't show up / flaked", "Scam or fraud", "Inappropriate messages", "Spam", "Other"];
+// A compact "report or block this person" control. Drop it anywhere you show
+// the other party in an interaction (chat, a claimed quest card). It self-hides
+// if there's no other person or it's you. Reports go to the admin Reports page;
+// blocking quietly removes the two of you from each other's board.
+function ReportBlock({ userId, userName }) {
+  const { user, blockedIds, reportUser, blockUser, unblockUser } = useApp();
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState(null);            // null | "report" | "block"
+  const [reason, setReason] = useState(REPORT_REASONS[0]);
+  const [details, setDetails] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!userId || userId === user.id) return null;
+  const blocked = blockedIds.has(userId);
+  const name = userName || "this person";
+  const shut = () => { setOpen(false); setMode(null); };
+
+  async function submitReport() {
+    setBusy(true);
+    const ok = await reportUser(userId, userName, null, reason, details);
+    setBusy(false);
+    if (ok) { setDetails(""); shut(); }
+  }
+  async function doBlock() { setBusy(true); await blockUser(userId, userName); setBusy(false); shut(); }
+  async function doUnblock() { setBusy(true); await unblockUser(userId, userName); setBusy(false); shut(); }
+
+  return (
+    <div className="rb-wrap">
+      <button className="rb-btn" onClick={() => { setOpen(o => !o); setMode(null); }} aria-label="Report or block" title="Report or block">
+        <MoreVertical size={16} strokeWidth={2.4} />
+      </button>
+      {open && (
+        <>
+          <div className="rb-backdrop" onClick={shut} />
+          <div className="rb-menu">
+            {mode === null && (
+              <>
+                <div className="rb-head">{name}</div>
+                <button className="rb-item" onClick={() => setMode("report")}><Flag size={14} strokeWidth={2.4} /> Report</button>
+                {blocked
+                  ? <button className="rb-item" onClick={doUnblock} disabled={busy}><UserCheck size={14} strokeWidth={2.4} /> Unblock</button>
+                  : <button className="rb-item danger" onClick={() => setMode("block")}><UserX size={14} strokeWidth={2.4} /> Block</button>}
+              </>
+            )}
+            {mode === "report" && (
+              <div className="rb-form">
+                <div className="rb-head">Report {name}</div>
+                <select className="rb-select" value={reason} onChange={e => setReason(e.target.value)}>
+                  {REPORT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <textarea className="rb-text" placeholder="What happened? (optional)" value={details} onChange={e => setDetails(e.target.value)} maxLength={2000} rows={3} />
+                <div className="rb-actions">
+                  <button className="rb-cancel" onClick={() => setMode(null)}>Back</button>
+                  <button className="rb-send" onClick={submitReport} disabled={busy}>{busy ? "Sending…" : "Send report"}</button>
+                </div>
+              </div>
+            )}
+            {mode === "block" && (
+              <div className="rb-form">
+                <div className="rb-head">Block {name}?</div>
+                <p className="rb-note">You won't be matched again — their quests won't show on your board, and they can't take yours. You can unblock anytime.</p>
+                <div className="rb-actions">
+                  <button className="rb-cancel" onClick={() => setMode(null)}>Cancel</button>
+                  <button className="rb-send danger" onClick={doBlock} disabled={busy}>{busy ? "Blocking…" : "Block"}</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 function JobChat({ job }) {
   const { user, toast } = useApp();
   const [open, setOpen] = useState(false);
@@ -1688,7 +1764,7 @@ function JobChat({ job }) {
   );
 }
 function WorkerHome() {
-  const { user, jobs, view, setEnergy, refreshJobs, saveSettings, setHomeLocation, toast, platform } = useApp();
+  const { user, jobs, view, setEnergy, refreshJobs, saveSettings, setHomeLocation, toast, platform, blockedIds } = useApp();
   const [cat, setCat] = useState("All");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState("smart");
@@ -1731,7 +1807,7 @@ function WorkerHome() {
     toast("Location set — sorting by distance.", "success");
   }
 
-  const open = jobs.filter(j => j.status === "open" && j.deadline > Date.now());
+  const open = jobs.filter(j => j.status === "open" && j.deadline > Date.now() && !blockedIds.has(j.postedBy));
   const savedOpenCount = open.reduce((n, j) => n + (saved.has(j.id) ? 1 : 0), 0);
   const decorated = open.map(j => ({
     job: j,
@@ -2115,6 +2191,26 @@ function PayoutPanel({ compact }) {
     </div>
   );
 }
+function BugReportCard() {
+  const { reportBug } = useApp();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    if (!text.trim()) return;
+    setBusy(true);
+    const ok = await reportBug(text.trim(), "");
+    setBusy(false);
+    if (ok) setText("");
+  }
+  return (
+    <div className="card set-card">
+      <h2 className="set-h"><Bug size={17} /> Report a bug</h2>
+      <p className="set-p">Something broken or acting weird? Tell us what happened — what you did, what you expected, and what actually happened — and we'll look into it.</p>
+      <textarea className="bug-text" placeholder="Describe the bug…" value={text} onChange={e => setText(e.target.value)} maxLength={4000} rows={4} />
+      <Btn variant="soft" size="sm" icon={Send} onClick={submit} disabled={busy || !text.trim()}>{busy ? "Sending…" : "Send bug report"}</Btn>
+    </div>
+  );
+}
 function SettingsScreen() {
   const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform, deleteAccount } = useApp();
   const s = user.settings || {};
@@ -2283,6 +2379,8 @@ function SettingsScreen() {
         </div>
       )}
 
+      <BugReportCard />
+
       <div className="card set-card danger-card">
         <h2 className="set-h danger-h"><Trash2 size={17} /> Delete account</h2>
         <p className="set-p">Permanently removes your account from SideQuest. This can't be undone.</p>
@@ -2314,7 +2412,7 @@ function SettingsScreen() {
 function loadIdSet(key) { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); } }
 function saveIdSet(key, set) { try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) {} }
 function ProfileMenu() {
-  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode, supportUnread, adminChatUnread } = useApp();
+  const { user, setView, logout, jobs, msgNotifs, refreshMsgNotifs, markMsgsSeen, switchMode, supportUnread, adminChatUnread, reportsOpen } = useApp();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const isClient = user.type === "client";
@@ -2446,6 +2544,12 @@ function ProfileMenu() {
               <button className="pm-link pm-admin" onClick={() => go("adminchat")}>
                 <MessageSquare size={15} strokeWidth={2.3} /><span>Admin chat</span>
                 {adminChatUnread > 0 && <span className="pm-link-badge">{adminChatUnread > 9 ? "9+" : adminChatUnread}</span>}
+              </button>
+            )}
+            {user.isAdmin && (
+              <button className="pm-link pm-admin" onClick={() => go("reports")}>
+                <Flag size={15} strokeWidth={2.3} /><span>Reports</span>
+                {reportsOpen > 0 && <span className="pm-link-badge">{reportsOpen > 9 ? "9+" : reportsOpen}</span>}
               </button>
             )}
             <button className="pm-link" onClick={() => go("support")}>
@@ -3126,6 +3230,101 @@ function AdminSupport() {
 /* ============================================================
    ADMIN — platform controls (only rendered for is_admin accounts)
    ============================================================ */
+function ReportsScreen() {
+  const { refreshReportsOpen } = useApp();
+  const [tab, setTab] = useState("people");        // people | bugs
+  const [reports, setReports] = useState([]);
+  const [bugs, setBugs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("open");    // open | all
+
+  async function load() {
+    setLoading(true);
+    try {
+      const { data: r } = await supabase.from("user_reports").select("*").order("created_at", { ascending: false }).limit(300);
+      const { data: b } = await supabase.from("bug_reports").select("*").order("created_at", { ascending: false }).limit(300);
+      setReports(r || []); setBugs(b || []);
+    } catch (e) { /* RLS or network */ }
+    setLoading(false);
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  async function setReportStatus(id, status) {
+    await supabase.from("user_reports").update({ status }).eq("id", id);
+    setReports(prev => prev.map(x => x.id === id ? { ...x, status } : x));
+    play("toggle"); refreshReportsOpen();
+  }
+  async function setBugStatus(id, status) {
+    await supabase.from("bug_reports").update({ status }).eq("id", id);
+    setBugs(prev => prev.map(x => x.id === id ? { ...x, status } : x));
+    play("toggle"); refreshReportsOpen();
+  }
+
+  const shownReports = reports.filter(r => filter === "all" || r.status === "open");
+  const shownBugs = bugs.filter(b => filter === "all" || b.status === "open");
+  const openReports = reports.filter(r => r.status === "open").length;
+  const openBugs = bugs.filter(b => b.status === "open").length;
+  const when = ts => new Date(Number(ts) || 0).toLocaleString();
+
+  return (
+    <div className="page page-narrow">
+      <header className="page-head"><h1>Reports</h1><p>People reports and bug reports from your users.</p></header>
+      <div className="stim-toggle rep-tabs">
+        <button className={tab === "people" ? "on" : ""} onClick={() => { setTab("people"); play("toggle"); }}>
+          <Flag size={15} /> People {openReports > 0 && <span className="rep-badge">{openReports}</span>}
+        </button>
+        <button className={tab === "bugs" ? "on" : ""} onClick={() => { setTab("bugs"); play("toggle"); }}>
+          <Bug size={15} /> Bugs {openBugs > 0 && <span className="rep-badge">{openBugs}</span>}
+        </button>
+      </div>
+      <div className="rep-filter">
+        <Chip active={filter === "open"} onClick={() => setFilter("open")}>Open only</Chip>
+        <Chip active={filter === "all"} onClick={() => setFilter("all")}>All</Chip>
+        <button className="rep-refresh" onClick={load}><RefreshCw size={14} strokeWidth={2.4} /> Refresh</button>
+      </div>
+      {loading ? <div className="chat-empty">Loading…</div> : tab === "people" ? (
+        shownReports.length === 0
+          ? <Empty icon={Flag} title="Nothing to review" body="Reports people file against each other land here." />
+          : <div className="rep-list">{shownReports.map(r => (
+              <div key={r.id} className={`card rep-card ${r.status !== "open" ? "rep-done" : ""}`}>
+                <div className="rep-top">
+                  <span className="rep-reason">{r.reason || "Report"}</span>
+                  <span className={`rep-status st-${r.status}`}>{r.status}</span>
+                </div>
+                <div className="rep-line"><strong>{r.reported_name || "Unknown user"}</strong> — reported by {r.reporter_name || "someone"}</div>
+                {r.details ? <p className="rep-details">“{r.details}”</p> : null}
+                <div className="rep-meta">{when(r.created_at)}</div>
+                {r.status === "open" ? (
+                  <div className="rep-actions">
+                    <button className="rep-act" onClick={() => setReportStatus(r.id, "reviewed")}><Check size={14} strokeWidth={3} /> Mark reviewed</button>
+                    <button className="rep-act ghost" onClick={() => setReportStatus(r.id, "dismissed")}><X size={14} strokeWidth={3} /> Dismiss</button>
+                  </div>
+                ) : <button className="rep-reopen" onClick={() => setReportStatus(r.id, "open")}>Reopen</button>}
+              </div>
+            ))}</div>
+      ) : (
+        shownBugs.length === 0
+          ? <Empty icon={Bug} title="No bug reports" body="Bug reports from users land here." />
+          : <div className="rep-list">{shownBugs.map(b => (
+              <div key={b.id} className={`card rep-card ${b.status !== "open" ? "rep-done" : ""}`}>
+                <div className="rep-top">
+                  <span className="rep-reason"><Bug size={13} strokeWidth={2.4} /> Bug</span>
+                  <span className={`rep-status st-${b.status}`}>{b.status}</span>
+                </div>
+                <p className="rep-details">{b.details || "(no description)"}</p>
+                <div className="rep-meta">{b.reporter_name || "Anonymous"}{b.reporter_email ? ` · ${b.reporter_email}` : ""} · {when(b.created_at)}</div>
+                {b.status === "open" ? (
+                  <div className="rep-actions">
+                    <button className="rep-act" onClick={() => setBugStatus(b.id, "resolved")}><Check size={14} strokeWidth={3} /> Mark resolved</button>
+                    <button className="rep-act ghost" onClick={() => setBugStatus(b.id, "dismissed")}><X size={14} strokeWidth={3} /> Dismiss</button>
+                  </div>
+                ) : <button className="rep-reopen" onClick={() => setBugStatus(b.id, "open")}>Reopen</button>}
+              </div>
+            ))}</div>
+      )}
+    </div>
+  );
+}
 function AdminScreen() {
   const { platform, savePlatform, toast, refreshJobs, user, setUserAdmin, listAdmins } = useApp();
   const [f, setF] = useState(platform);
@@ -3550,6 +3749,8 @@ function App() {
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
   const [supportUnread, setSupportUnread] = useState(0);
   const [adminChatUnread, setAdminChatUnread] = useState(0);
+  const [blockedIds, setBlockedIds] = useState(new Set());
+  const [reportsOpen, setReportsOpen] = useState(0);
 
   const reduceMotion = useRef(false);
   useEffect(() => {
@@ -3594,6 +3795,7 @@ function App() {
     const res = await dbFetchJobs();
     setJobs(res.jobs);
     refreshPlatform();
+    refreshBlocks();
     enter(profile);
     return true;
   }
@@ -3610,6 +3812,55 @@ function App() {
     if (error) { toast(error.message || "Couldn't save — are you the admin?", "error"); return false; }
     await refreshPlatform();
     toast("Platform settings saved.", "success");
+    return true;
+  }
+
+  // ---- Safety: reports, blocks & bug reports ----
+  // Load the set of user ids that are "blocked relative to me" (either direction)
+  // so the board can hide those people. Silent — never reveals who blocked whom.
+  async function refreshBlocks() {
+    try {
+      const { data } = await supabase.rpc("my_block_ids");
+      setBlockedIds(new Set(Array.isArray(data) ? data : []));
+    } catch (e) { /* keep what we have */ }
+  }
+  async function reportUser(reportedId, reportedName, jobId, reason, details) {
+    if (!reportedId) return false;
+    const { error } = await supabase.from("user_reports").insert({
+      reporter_id: user.id, reporter_name: user.name || "",
+      reported_id: reportedId, reported_name: reportedName || "",
+      job_id: jobId || null, reason: reason || "other",
+      details: (details || "").slice(0, 2000), created_at: Date.now(),
+    });
+    if (error) { toast(error.message || "Couldn't send your report.", "error"); return false; }
+    toast("Report sent to the SideQuest team. Thank you.", "success");
+    return true;
+  }
+  async function blockUser(blockedId, blockedName) {
+    if (!blockedId || blockedId === user.id) return false;
+    const { error } = await supabase.from("user_blocks").insert({
+      blocker_id: user.id, blocked_id: blockedId, created_at: Date.now(),
+    });
+    if (error && error.code !== "23505") { toast(error.message || "Couldn't block this person.", "error"); return false; }
+    await refreshBlocks();
+    toast(`${blockedName || "That person"} is blocked — you won't be matched with them.`, "success");
+    return true;
+  }
+  async function unblockUser(blockedId, blockedName) {
+    if (!blockedId) return false;
+    const { error } = await supabase.from("user_blocks").delete().eq("blocker_id", user.id).eq("blocked_id", blockedId);
+    if (error) { toast(error.message || "Couldn't unblock.", "error"); return false; }
+    await refreshBlocks();
+    toast(`${blockedName || "That person"} is unblocked.`, "info");
+    return true;
+  }
+  async function reportBug(details, area) {
+    const { error } = await supabase.from("bug_reports").insert({
+      reporter_id: user.id, reporter_name: user.name || "", reporter_email: user.email || "",
+      details: (details || "").slice(0, 4000), area: (area || "").slice(0, 80), created_at: Date.now(),
+    });
+    if (error) { toast(error.message || "Couldn't send your bug report.", "error"); return false; }
+    toast("Bug report sent — thank you for helping improve SideQuest!", "success");
     return true;
   }
 
@@ -3678,6 +3929,17 @@ function App() {
         : qy.eq("user_id", me.id).eq("sender", "admin").eq("read_by_user", false);
       const { count } = await qy;
       setSupportUnread(count || 0);
+    } catch (e) { /* ignore */ }
+  }
+  // Count of open reports (people + bugs) for the admin badge. Admins only —
+  // RLS would return nothing for everyone else, so we skip the query entirely.
+  async function refreshReportsOpen(u) {
+    const me = u || user;
+    if (!me || !me.isAdmin) { setReportsOpen(0); return; }
+    try {
+      const { count: rc } = await supabase.from("user_reports").select("id", { count: "exact", head: true }).eq("status", "open");
+      const { count: bc } = await supabase.from("bug_reports").select("id", { count: "exact", head: true }).eq("status", "open");
+      setReportsOpen((rc || 0) + (bc || 0));
     } catch (e) { /* ignore */ }
   }
 
@@ -4076,7 +4338,8 @@ function App() {
   useEffect(() => {
     if (phase !== "app" || !user) return;
     refreshSupportUnread();
-    const t = setInterval(() => refreshSupportUnread(), 60000);
+    refreshReportsOpen();
+    const t = setInterval(() => { refreshSupportUnread(); refreshReportsOpen(); }, 60000);
     let ch = null;
     if (CONFIGURED && ENABLE_REALTIME) {
       ch = supabase.channel("support-badge-" + user.id)
@@ -4238,8 +4501,10 @@ function App() {
     platform, savePlatform, refreshPlatform,
     deleteAccount, setUserAdmin, listAdmins, cityLeaderboard,
     supportUnread, refreshSupportUnread,
+    reportsOpen, refreshReportsOpen,
     adminChatUnread, refreshAdminChatUnread, adminChannelList, adminCreateGroup, adminOpenDM,
     sendTip,
+    blockedIds, refreshBlocks, reportUser, blockUser, unblockUser, reportBug,
   };
 
   return (
@@ -4270,6 +4535,8 @@ function App() {
                 <AdminScreen />
               ) : view === "adminchat" && user.isAdmin ? (
                 <AdminChat />
+              ) : view === "reports" && user.isAdmin ? (
+                <ReportsScreen />
               ) : view === "support" ? (
                 <SupportScreen />
               ) : view === "schedule" ? (
@@ -5063,6 +5330,57 @@ em{font-style:normal;color:var(--primary)}
 .save-heart{margin-left:auto;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:8px;transition:.14s;flex:none}
 .save-heart:hover{color:var(--primary);background:var(--primary-l)}
 .save-heart.on{color:var(--primary)}
+/* report / block menu */
+.rb-wrap{position:relative;margin-left:auto;flex:none}
+.rb-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:8px;transition:.14s}
+.rb-btn:hover{color:var(--ink);background:var(--card2)}
+.rb-backdrop{position:fixed;inset:0;z-index:60}
+.rb-menu{position:absolute;top:32px;right:0;z-index:61;width:240px;background:var(--card);border:1px solid var(--line2);border-radius:13px;box-shadow:0 18px 44px -16px rgba(0,0,0,.7);padding:6px;animation:rbIn .14s ease}
+@keyframes rbIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.rb-head{font-family:var(--disp);font-weight:800;font-size:13px;color:var(--ink);padding:7px 9px 5px}
+.rb-item{display:flex;align-items:center;gap:9px;width:100%;border:none;background:none;color:var(--ink);font-size:13.5px;font-weight:600;padding:9px;border-radius:9px;cursor:pointer;text-align:left;transition:.12s}
+.rb-item:hover:not(:disabled){background:var(--card2)}
+.rb-item.danger{color:#FF6B6B}
+.rb-item svg{flex:none}
+.rb-form{padding:4px}
+.rb-select{width:100%;background:var(--card2);border:1px solid var(--line2);border-radius:9px;color:var(--ink);font-size:13px;font-weight:600;padding:9px;margin-bottom:7px;font-family:var(--disp)}
+.rb-text{width:100%;background:var(--card2);border:1px solid var(--line2);border-radius:9px;color:var(--ink);font-size:13px;padding:9px;resize:vertical;font-family:inherit;margin-bottom:8px;box-sizing:border-box}
+.rb-text:focus,.rb-select:focus{outline:none;border-color:var(--primary)}
+.rb-note{font-size:12px;color:var(--muted);line-height:1.45;padding:0 2px 8px}
+.rb-actions{display:flex;gap:8px;justify-content:flex-end}
+.rb-cancel{background:none;border:none;color:var(--muted);font-weight:700;font-size:13px;padding:8px 10px;cursor:pointer;font-family:var(--disp)}
+.rb-send{background:var(--primary);border:none;color:#fff;font-weight:800;font-size:13px;padding:8px 14px;border-radius:9px;cursor:pointer;font-family:var(--disp)}
+.rb-send:hover:not(:disabled){filter:brightness(1.08)}
+.rb-send:disabled{opacity:.6;cursor:default}
+.rb-send.danger{background:#E1452F}
+.bug-text{width:100%;background:var(--card2);border:1.5px solid var(--line2);border-radius:12px;color:var(--ink);font-size:14px;padding:12px;resize:vertical;font-family:inherit;margin-bottom:10px;box-sizing:border-box;line-height:1.5}
+.bug-text:focus{outline:none;border-color:var(--primary)}
+/* admin reports page */
+.rep-tabs{margin-bottom:12px}
+.rep-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;margin-left:6px;border-radius:9px;background:var(--primary);color:#fff;font-size:11px;font-weight:800;font-family:var(--disp)}
+.rep-filter{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.rep-refresh{margin-left:auto;display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--line2);border-radius:10px;color:var(--muted);font-weight:700;font-size:12.5px;padding:7px 11px;cursor:pointer;font-family:var(--disp);transition:.14s}
+.rep-refresh:hover{color:var(--ink);border-color:var(--primary)}
+.rep-list{display:flex;flex-direction:column;gap:11px}
+.rep-card{padding:14px 16px}
+.rep-card.rep-done{opacity:.62}
+.rep-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.rep-reason{display:inline-flex;align-items:center;gap:5px;font-family:var(--disp);font-weight:800;font-size:13.5px;color:var(--ink)}
+.rep-status{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:3px 9px;border-radius:8px;flex:none}
+.st-open{background:var(--primary-l);color:var(--primary)}
+.st-reviewed,.st-resolved{background:var(--mint-l);color:var(--mint)}
+.st-dismissed{background:var(--card2);color:var(--muted)}
+.rep-line{font-size:13.5px;color:var(--ink2);line-height:1.45;margin-bottom:6px}
+.rep-line strong{color:var(--ink);font-weight:800}
+.rep-details{font-size:13.5px;color:var(--ink);line-height:1.5;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 8px;white-space:pre-wrap;word-break:break-word}
+.rep-meta{font-size:11.5px;color:var(--muted);font-weight:600}
+.rep-actions{display:flex;gap:8px;margin-top:11px}
+.rep-act{display:inline-flex;align-items:center;gap:5px;background:var(--mint);color:#06231a;border:none;border-radius:9px;font-weight:800;font-size:12.5px;padding:8px 12px;cursor:pointer;font-family:var(--disp);transition:.14s}
+.rep-act:hover{filter:brightness(1.06)}
+.rep-act.ghost{background:none;border:1px solid var(--line2);color:var(--muted)}
+.rep-act.ghost:hover{color:var(--ink);border-color:#E1452F}
+.rep-reopen{margin-top:10px;background:none;border:1px solid var(--line2);color:var(--muted);border-radius:9px;font-weight:700;font-size:12.5px;padding:7px 12px;cursor:pointer;font-family:var(--disp)}
+.rep-reopen:hover{color:var(--ink);border-color:var(--primary)}
 
 /* empty */
 .empty{text-align:center;padding:54px 24px;background:var(--card);border:1.5px dashed var(--line2);border-radius:var(--r-lg)}
