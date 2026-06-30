@@ -472,6 +472,24 @@ async function signedProofUrl(path) {
   } catch (e) { return null; }
 }
 
+/* ---------- attachments storage (private 'attachments' bucket) ----------
+   Screenshots on reports & bug reports, and images in admin chat. Uploader or
+   an admin can read (signed URLs, 1-hour expiry). */
+async function uploadAttachment(folder, file) {
+  const safe = (file.name || "image").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = (folder || "misc") + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 7) + "-" + safe;
+  const { error } = await supabase.storage.from("attachments").upload(path, file, { upsert: false, contentType: file.type || undefined });
+  if (error) throw error;
+  return path;
+}
+async function signedAttachmentUrl(path) {
+  try {
+    const { data, error } = await supabase.storage.from("attachments").createSignedUrl(path, 3600);
+    if (error || !data) return null;
+    return data.signedUrl;
+  } catch (e) { return null; }
+}
+
 /* ---------- device notifications (opt-in) ---------- */
 // Shows a system notification via the service worker (falls back to the
 // Notifications API). By default it only fires when the tab isn't focused, so
@@ -1622,6 +1640,86 @@ function ProofGallery({ paths }) {
     </div>
   );
 }
+// Pick + upload images to the attachments bucket. `images` is an array of
+// storage paths owned by the parent; this handles upload, instant preview, and
+// removal. Used by report/bug forms and the admin chat composer.
+function ImagePicker({ images, setImages, folder, max = 4, label = "Add screenshot" }) {
+  const { toast } = useApp();
+  const ref = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [previews, setPreviews] = useState({});
+  async function onFiles(e) {
+    const files = Array.from(e.target.files || []);
+    if (ref.current) ref.current.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    let count = images.length;
+    for (const f of files) {
+      if (count >= max) { toast(`You can add up to ${max} images.`, "info"); break; }
+      if (!f.type || !f.type.startsWith("image/")) { toast("Only image files, please.", "info"); continue; }
+      if (f.size > 10 * 1024 * 1024) { toast("That image is over 10 MB — pick a smaller one.", "info"); continue; }
+      try {
+        const path = await uploadAttachment(folder, f);
+        setPreviews(p => ({ ...p, [path]: URL.createObjectURL(f) }));
+        setImages(prev => [...prev, path]);
+        count++;
+      } catch (err) { toast("Upload failed — is Storage set up?", "error"); }
+    }
+    setBusy(false);
+  }
+  function remove(path) { setImages(prev => prev.filter(p => p !== path)); }
+  return (
+    <div className="imgpick">
+      {images.map(p => (
+        <div key={p} className="imgpick-thumb">
+          {previews[p] ? <img src={previews[p]} alt="" /> : <AttachmentImg path={p} />}
+          <button className="imgpick-x" onClick={() => remove(p)} aria-label="Remove image"><X size={12} strokeWidth={3} /></button>
+        </div>
+      ))}
+      {images.length < max && (
+        <button className="imgpick-add" onClick={() => ref.current && ref.current.click()} disabled={busy} type="button">
+          {busy ? <span className="spin"><RefreshCw size={16} /></span> : <><Plus size={16} strokeWidth={2.6} /><span>{label}</span></>}
+        </button>
+      )}
+      <input ref={ref} type="file" accept="image/*" multiple hidden onChange={onFiles} />
+    </div>
+  );
+}
+// Render one attachment via a short-lived signed URL (uploader/admin only).
+function AttachmentImg({ path, className }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let on = true;
+    (async () => { const u = await signedAttachmentUrl(path); if (on) setUrl(u); })();
+    return () => { on = false; };
+  }, [path]);
+  if (!url) return <div className={"att-loading " + (className || "")}><span className="spin"><RefreshCw size={14} /></span></div>;
+  return <img src={url} alt="attachment" className={className || ""} loading="lazy" />;
+}
+// A grid of attachment thumbnails (tap to open full size). Used in the admin
+// Reports page and admin chat bubbles.
+function AttachmentGallery({ paths, small }) {
+  const [urls, setUrls] = useState([]);
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      const out = [];
+      for (const p of (paths || [])) { const u = await signedAttachmentUrl(p); if (u) out.push({ path: p, url: u }); }
+      if (on) setUrls(out);
+    })();
+    return () => { on = false; };
+  }, [JSON.stringify(paths || [])]);
+  if (!paths || paths.length === 0) return null;
+  return (
+    <div className={`att-grid ${small ? "att-grid-sm" : ""}`}>
+      {urls.map(u => (
+        <a key={u.path} href={u.url} target="_blank" rel="noopener noreferrer" className="att-thumb" title="Open full size">
+          <img src={u.url} alt="attachment" loading="lazy" />
+        </a>
+      ))}
+    </div>
+  );
+}
 const REPORT_REASONS = ["Harassment or abuse", "Didn't show up / flaked", "Scam or fraud", "Inappropriate messages", "Spam", "Other"];
 // A compact "report or block this person" control. Drop it anywhere you show
 // the other party in an interaction (chat, a claimed quest card). It self-hides
@@ -1633,6 +1731,7 @@ function ReportBlock({ userId, userName }) {
   const [mode, setMode] = useState(null);            // null | "report" | "block"
   const [reason, setReason] = useState(REPORT_REASONS[0]);
   const [details, setDetails] = useState("");
+  const [images, setImages] = useState([]);
   const [busy, setBusy] = useState(false);
   if (!userId || userId === user.id) return null;
   const blocked = blockedIds.has(userId);
@@ -1641,9 +1740,9 @@ function ReportBlock({ userId, userName }) {
 
   async function submitReport() {
     setBusy(true);
-    const ok = await reportUser(userId, userName, null, reason, details);
+    const ok = await reportUser(userId, userName, null, reason, details, images);
     setBusy(false);
-    if (ok) { setDetails(""); shut(); }
+    if (ok) { setDetails(""); setImages([]); shut(); }
   }
   async function doBlock() { setBusy(true); await blockUser(userId, userName); setBusy(false); shut(); }
   async function doUnblock() { setBusy(true); await unblockUser(userId, userName); setBusy(false); shut(); }
@@ -1673,6 +1772,7 @@ function ReportBlock({ userId, userName }) {
                   {REPORT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <textarea className="rb-text" placeholder="What happened? (optional)" value={details} onChange={e => setDetails(e.target.value)} maxLength={2000} rows={3} />
+                <ImagePicker images={images} setImages={setImages} folder="reports" max={4} />
                 <div className="rb-actions">
                   <button className="rb-cancel" onClick={() => setMode(null)}>Back</button>
                   <button className="rb-send" onClick={submitReport} disabled={busy}>{busy ? "Sending…" : "Send report"}</button>
@@ -2194,19 +2294,21 @@ function PayoutPanel({ compact }) {
 function BugReportCard() {
   const { reportBug } = useApp();
   const [text, setText] = useState("");
+  const [images, setImages] = useState([]);
   const [busy, setBusy] = useState(false);
   async function submit() {
     if (!text.trim()) return;
     setBusy(true);
-    const ok = await reportBug(text.trim(), "");
+    const ok = await reportBug(text.trim(), "", images);
     setBusy(false);
-    if (ok) setText("");
+    if (ok) { setText(""); setImages([]); }
   }
   return (
     <div className="card set-card">
       <h2 className="set-h"><Bug size={17} /> Report a bug</h2>
-      <p className="set-p">Something broken or acting weird? Tell us what happened — what you did, what you expected, and what actually happened — and we'll look into it.</p>
+      <p className="set-p">Something broken or acting weird? Tell us what happened — what you did, what you expected, and what actually happened — and we'll look into it. Add a screenshot if it helps.</p>
       <textarea className="bug-text" placeholder="Describe the bug…" value={text} onChange={e => setText(e.target.value)} maxLength={4000} rows={4} />
+      <ImagePicker images={images} setImages={setImages} folder="bugs" max={4} />
       <Btn variant="soft" size="sm" icon={Send} onClick={submit} disabled={busy || !text.trim()}>{busy ? "Sending…" : "Send bug report"}</Btn>
     </div>
   );
@@ -3293,6 +3395,7 @@ function ReportsScreen() {
                 </div>
                 <div className="rep-line"><strong>{r.reported_name || "Unknown user"}</strong> — reported by {r.reporter_name || "someone"}</div>
                 {r.details ? <p className="rep-details">“{r.details}”</p> : null}
+                {r.images && r.images.length > 0 && <AttachmentGallery paths={r.images} />}
                 <div className="rep-meta">{when(r.created_at)}</div>
                 {r.status === "open" ? (
                   <div className="rep-actions">
@@ -3312,6 +3415,7 @@ function ReportsScreen() {
                   <span className={`rep-status st-${b.status}`}>{b.status}</span>
                 </div>
                 <p className="rep-details">{b.details || "(no description)"}</p>
+                {b.images && b.images.length > 0 && <AttachmentGallery paths={b.images} />}
                 <div className="rep-meta">{b.reporter_name || "Anonymous"}{b.reporter_email ? ` · ${b.reporter_email}` : ""} · {when(b.created_at)}</div>
                 {b.status === "open" ? (
                   <div className="rep-actions">
@@ -3494,6 +3598,7 @@ function AdminChat() {
   const [msgs, setMsgs] = useState([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [text, setText] = useState("");
+  const [imgs, setImgs] = useState([]);
   const [compose, setCompose] = useState(null);    // null | "group" | "dm"
   const [admins, setAdmins] = useState([]);
   const [loadingAdmins, setLoadingAdmins] = useState(false);
@@ -3558,11 +3663,12 @@ function AdminChat() {
 
   async function send() {
     const body = text.trim();
-    if (!body || !sel || busy) return;
+    if ((!body && imgs.length === 0) || !sel || busy) return;
     setText("");
-    const row = { channel_id: sel.channel_id, sender_id: user.id, sender_name: user.name, body, created_at: Date.now() };
+    const sentImgs = imgs; setImgs([]);
+    const row = { channel_id: sel.channel_id, sender_id: user.id, sender_name: user.name, body, images: sentImgs, created_at: Date.now() };
     const { data, error } = await supabase.from("admin_messages").insert(row).select().single();
-    if (error) { toast("Message didn't send — try again.", "error"); setText(body); return; }
+    if (error) { toast("Message didn't send — try again.", "error"); setText(body); setImgs(sentImgs); return; }
     if (data) setMsgs(prev => prev.some(x => x.id === data.id) ? prev : [...prev, data]);
     play("click");
     markRead(sel.channel_id);
@@ -3624,15 +3730,19 @@ function AdminChat() {
               {msgs.map(m => (
                 <div key={m.id} className={`bubble ${m.sender_id === user.id ? "mine" : ""}`}>
                   {m.sender_id !== user.id && sel.kind !== "dm" && <span className="bubble-name">{m.sender_name}</span>}
-                  <span className="bubble-text">{m.body}</span>
+                  {m.body ? <span className="bubble-text">{m.body}</span> : null}
+                  {m.images && m.images.length > 0 && <AttachmentGallery paths={m.images} small />}
                 </div>
               ))}
               <div ref={endRef} />
             </div>
-            <div className="chat-input">
-              <input value={text} onChange={e => setText(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && send()} placeholder="Type a message…" maxLength={1000} />
-              <button className="chat-send" onClick={send} aria-label="Send"><Send size={16} strokeWidth={2.4} /></button>
+            <div className="chat-composer">
+              <ImagePicker images={imgs} setImages={setImgs} folder="adminchat" max={4} label="Image" />
+              <div className="chat-input">
+                <input value={text} onChange={e => setText(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && send()} placeholder="Type a message…" maxLength={1000} />
+                <button className="chat-send" onClick={send} disabled={!text.trim() && imgs.length === 0} aria-label="Send"><Send size={16} strokeWidth={2.4} /></button>
+              </div>
             </div>
           </div>
         </div>
@@ -3824,13 +3934,14 @@ function App() {
       setBlockedIds(new Set(Array.isArray(data) ? data : []));
     } catch (e) { /* keep what we have */ }
   }
-  async function reportUser(reportedId, reportedName, jobId, reason, details) {
+  async function reportUser(reportedId, reportedName, jobId, reason, details, images) {
     if (!reportedId) return false;
     const { error } = await supabase.from("user_reports").insert({
       reporter_id: user.id, reporter_name: user.name || "",
       reported_id: reportedId, reported_name: reportedName || "",
       job_id: jobId || null, reason: reason || "other",
-      details: (details || "").slice(0, 2000), created_at: Date.now(),
+      details: (details || "").slice(0, 2000),
+      images: Array.isArray(images) ? images : [], created_at: Date.now(),
     });
     if (error) { toast(error.message || "Couldn't send your report.", "error"); return false; }
     toast("Report sent to the SideQuest team. Thank you.", "success");
@@ -3842,8 +3953,18 @@ function App() {
       blocker_id: user.id, blocked_id: blockedId, created_at: Date.now(),
     });
     if (error && error.code !== "23505") { toast(error.message || "Couldn't block this person.", "error"); return false; }
+    // Unwind any quest the two of you are mid-way through: it goes back on the
+    // board and off the worker's plate (escrow stays held). Then refresh both
+    // the block list (board filter) and the jobs list (so the change shows).
+    let released = 0;
+    try {
+      const { data } = await supabase.rpc("release_jobs_between", { p_other: blockedId });
+      released = Number(data) || 0;
+    } catch (e) { /* RPC missing or failed — block still applies */ }
     await refreshBlocks();
-    toast(`${blockedName || "That person"} is blocked — you won't be matched with them.`, "success");
+    await reloadJobs();
+    const extra = released > 0 ? ` A shared quest was returned to the board.` : "";
+    toast(`${blockedName || "That person"} is blocked — you won't be matched with them.${extra}`, "success");
     return true;
   }
   async function unblockUser(blockedId, blockedName) {
@@ -3854,10 +3975,11 @@ function App() {
     toast(`${blockedName || "That person"} is unblocked.`, "info");
     return true;
   }
-  async function reportBug(details, area) {
+  async function reportBug(details, area, images) {
     const { error } = await supabase.from("bug_reports").insert({
       reporter_id: user.id, reporter_name: user.name || "", reporter_email: user.email || "",
-      details: (details || "").slice(0, 4000), area: (area || "").slice(0, 80), created_at: Date.now(),
+      details: (details || "").slice(0, 4000), area: (area || "").slice(0, 80),
+      images: Array.isArray(images) ? images : [], created_at: Date.now(),
     });
     if (error) { toast(error.message || "Couldn't send your bug report.", "error"); return false; }
     toast("Bug report sent — thank you for helping improve SideQuest!", "success");
@@ -5381,6 +5503,23 @@ em{font-style:normal;color:var(--primary)}
 .rep-act.ghost:hover{color:var(--ink);border-color:#E1452F}
 .rep-reopen{margin-top:10px;background:none;border:1px solid var(--line2);color:var(--muted);border-radius:9px;font-weight:700;font-size:12.5px;padding:7px 12px;cursor:pointer;font-family:var(--disp)}
 .rep-reopen:hover{color:var(--ink);border-color:var(--primary)}
+/* image picker + attachment thumbnails */
+.imgpick{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.imgpick-thumb{position:relative;width:62px;height:62px;border-radius:10px;overflow:hidden;border:1px solid var(--line2);background:var(--card2);flex:none}
+.imgpick-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.imgpick-x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:6px;border:none;background:rgba(0,0,0,.6);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.imgpick-x:hover{background:#E1452F}
+.imgpick-add{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:62px;height:62px;border-radius:10px;border:1.5px dashed var(--line2);background:none;color:var(--muted);cursor:pointer;font-size:10px;font-weight:700;font-family:var(--disp);transition:.14s;flex:none;text-align:center;line-height:1.1}
+.imgpick-add:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+.imgpick-add:disabled{opacity:.6;cursor:default}
+.att-loading{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--muted)}
+.att-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.att-thumb{display:block;width:84px;height:84px;border-radius:10px;overflow:hidden;border:1px solid var(--line2);background:var(--card2)}
+.att-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.att-grid-sm{margin-top:6px}
+.att-grid-sm .att-thumb{width:150px;height:150px;max-width:100%}
+.chat-composer{display:flex;flex-direction:column}
+.chat-composer .imgpick{margin:0 0 8px;padding:0 2px}
 
 /* empty */
 .empty{text-align:center;padding:54px 24px;background:var(--card);border:1.5px dashed var(--line2);border-radius:var(--r-lg)}
