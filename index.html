@@ -68,8 +68,8 @@ function makeIcon(node) {
 }
 const __ICON_DATA = (window.lucide && window.lucide.icons) || {};
 const __ICONS = {};
-["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical","Users","Hash"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
-const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical, Users, Hash } = __ICONS;
+["Sparkles","Zap","Brain","CheckCircle2","Circle","Clock","Calendar","DollarSign","MapPin","Plus","LogOut","Settings","User","Briefcase","Search","Trophy","Flame","Star","Play","Pause","Volume2","VolumeX","ArrowRight","Check","X","Timer","ListChecks","Rocket","Target","Heart","Eye","EyeOff","ChevronRight","Bell","Wind","Trash2","PartyPopper","Coffee","TrendingUp","Award","Sun","RefreshCw","Gauge","MessageCircle","Send","ShieldCheck","LifeBuoy","HelpCircle","Inbox","ChevronDown","UserPlus","UserX","ArrowLeft","MessageSquare","CalendarDays","ChevronLeft","GripVertical","Users","Hash","Smartphone","ArrowDownUp"].forEach((n) => { __ICONS[n] = makeIcon(__ICON_DATA[n]); });
+const { Sparkles, Zap, Brain, CheckCircle2, Circle, Clock, Calendar, DollarSign, MapPin, Plus, LogOut, Settings, User, Briefcase, Search, Trophy, Flame, Star, Play, Pause, Volume2, VolumeX, ArrowRight, Check, X, Timer, ListChecks, Rocket, Target, Heart, Eye, EyeOff, ChevronRight, Bell, Wind, Trash2, PartyPopper, Coffee, TrendingUp, Award, Sun, RefreshCw, Gauge, MessageCircle, Send, ShieldCheck, LifeBuoy, HelpCircle, Inbox, ChevronDown, UserPlus, UserX, ArrowLeft, MessageSquare, CalendarDays, ChevronLeft, GripVertical, Users, Hash, Smartphone, ArrowDownUp } = __ICONS;
 
 /* ============================================================
    SideQuest — small quests, real rewards, your pace.
@@ -122,7 +122,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 /* ---------- default per-user settings (mirrors the SQL trigger) ---------- */
 function defaultSettings(type, name) {
   return {
-    soundOn: true, stim: "high", energy: "Medium",
+    soundOn: true, hapticOn: true, stim: "high", energy: "Medium",
     companyName: type === "client" ? (name || "") : "",
     defaultPayout: 60, notify: true, reminders: true,
     remindStart: true, remindStartMin: 30, remindDeadline: true, remindDeadlineMin: 120,
@@ -570,6 +570,23 @@ function blip(freq, start, dur, type, gain) {
   o.start(t); o.stop(t + dur + 0.03);
 }
 const AUDIO = { on: true, vol: 1 };
+const HAPTIC = { on: true };
+// Short vibration patterns (ms) for *meaningful* moments only — never for plain
+// clicks or the per-second Focus Sprint tick, which would be maddening. These
+// are a no-op on devices without the Vibration API (e.g. iOS Safari), so it's a
+// safe progressive enhancement that quietly does nothing where unsupported.
+const VIBES = {
+  claim:   [10, 35, 16],
+  success: [12, 45, 20],
+  levelup: [14, 35, 14, 35, 26],
+  error:   [35, 28, 35],
+  pop:     10,
+};
+function haptic(name) {
+  if (!HAPTIC.on || !navigator.vibrate) return;
+  const v = VIBES[name];
+  if (v) try { navigator.vibrate(v); } catch (e) {}
+}
 const SOUNDS = {
   click:   v => blip(320, 0, 0.05, "triangle", 0.07 * v),
   pop:     v => { blip(680, 0, 0.06, "sine", 0.13 * v); blip(1020, 0.03, 0.06, "sine", 0.08 * v); },
@@ -581,6 +598,7 @@ const SOUNDS = {
   toggle:  v => blip(440, 0, 0.05, "square", 0.05 * v),
 };
 function play(name) {
+  haptic(name); // independent of sound — respects its own toggle
   if (!AUDIO.on) return;
   const f = SOUNDS[name];
   if (f) try { f(AUDIO.vol); } catch (e) {}
@@ -601,6 +619,17 @@ const monthLabel = d => d.toLocaleString(undefined, { month: "long", year: "nume
 const clockTime = ts => new Date(ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 const hourLabel = h => { const ap = h < 12 ? "AM" : "PM"; const hr = (h % 12) === 0 ? 12 : h % 12; return hr + " " + ap; };
 const DAY = 86400000, HOUR = 3600000, MIN = 60000;
+// A warm, time-of-day greeting. Helps orient (ADHD brains lose track of time)
+// and makes the home screen feel personal. firstName keeps it short & friendly.
+function greetText() {
+  const h = new Date().getHours();
+  if (h < 5)  return { hi: "Still up", emo: "🌙" };
+  if (h < 12) return { hi: "Good morning", emo: "☀️" };
+  if (h < 17) return { hi: "Good afternoon", emo: "🌤️" };
+  if (h < 21) return { hi: "Good evening", emo: "🌆" };
+  return { hi: "Winding down", emo: "🌙" };
+}
+function firstName(name) { return String(name || "").trim().split(/\s+/)[0] || "there"; }
 function fmtRemaining(ms) {
   if (ms <= 0) return "Overdue";
   const d = Math.floor(ms / DAY), h = Math.floor((ms % DAY) / HOUR),
@@ -1263,7 +1292,7 @@ function ClientHome() {
     return (
       <div className="page">
         <header className="page-head">
-          <h1>Hey {user.name.split(" ")[0]} 👋</h1>
+          <h1>{greetText().hi}, {firstName(user.name)} {greetText().emo}</h1>
           <p>Post a quest and someone will pick it up on their own schedule.</p>
         </header>
         <div className="stat-row">
@@ -1307,7 +1336,7 @@ function Empty({ icon: Icon, title, body }) {
     </div>
   );
 }
-function BrowseCard({ job, distance, urgent }) {
+function BrowseCard({ job, distance, urgent, saved, onToggleSave }) {
   const { user, claimJob, platform } = useApp();
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState(toLocalInput(Math.min(Date.now() + HOUR, job.deadline)));
@@ -1329,6 +1358,11 @@ function BrowseCard({ job, distance, urgent }) {
         <span className="cat-tag">{job.category}</span>
         <span className={`effort effort-${job.effort.toLowerCase()}`}>{job.effort}</span>
         {match && <span className="match-tag"><Zap size={11} strokeWidth={3} />Your energy</span>}
+        {onToggleSave && (
+          <button className={`save-heart ${saved ? "on" : ""}`} onClick={() => onToggleSave(job.id)} aria-label={saved ? "Remove from saved" : "Save for later"} title={saved ? "Saved" : "Save for later"}>
+            <Heart size={16} strokeWidth={2.4} fill={saved ? "currentColor" : "none"} />
+          </button>
+        )}
       </div>
       <h3 className="jc-title">{job.title}</h3>
       {job.desc && <p className="jc-desc">{job.desc}</p>}
@@ -1657,6 +1691,16 @@ function WorkerHome() {
   const { user, jobs, view, setEnergy, refreshJobs, saveSettings, setHomeLocation, toast, platform } = useApp();
   const [cat, setCat] = useState("All");
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState("smart");
+  const [saved, setSaved] = useState(() => loadIdSet("sq_saved"));
+  const [showSaved, setShowSaved] = useState(false);
+  const toggleSave = id => {
+    const next = new Set(saved);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    saveIdSet("sq_saved", next);
+    setSaved(next);
+    play("toggle");
+  };
   const [addr, setAddr] = useState(user.settings?.locLabel || "");
   const [locBusy, setLocBusy] = useState(false);
 
@@ -1688,20 +1732,26 @@ function WorkerHome() {
   }
 
   const open = jobs.filter(j => j.status === "open" && j.deadline > Date.now());
+  const savedOpenCount = open.reduce((n, j) => n + (saved.has(j.id) ? 1 : 0), 0);
   const decorated = open.map(j => ({
     job: j,
     mi: (myLoc && j.lat != null) ? milesBetween(myLoc, { lat: j.lat, lng: j.lng }) : null,
   }));
   const filtered = decorated.filter(({ job: j, mi }) =>
     (cat === "All" || j.category === cat) &&
+    (!showSaved || saved.has(j.id)) &&
     (!q || (j.title + j.desc + j.location).toLowerCase().includes(q.toLowerCase())) &&
     (!useDist || !myLoc || mi == null || mi <= radius)
   ).sort((a, b) => {
-    if (useDist && myLoc) {
-      const am = a.mi == null ? Infinity : a.mi, bm = b.mi == null ? Infinity : b.mi;
-      if (am !== bm) return am - bm;
-    }
-    return a.job.deadline - b.job.deadline;
+    const A = a.job, B = b.job;
+    const am = a.mi == null ? Infinity : a.mi, bm = b.mi == null ? Infinity : b.mi;
+    if (sort === "pay")  return B.payout - A.payout || A.deadline - B.deadline;
+    if (sort === "new")  return B.createdAt - A.createdAt;
+    if (sort === "near") return am - bm || A.deadline - B.deadline;
+    if (sort === "soon") return A.deadline - B.deadline;
+    // "smart" (default): closest first when distance sorting is on, else soonest.
+    if (useDist && myLoc && am !== bm) return am - bm;
+    return A.deadline - B.deadline;
   });
 
   // A quest that was claimed and then dropped comes back to the board needing
@@ -1782,7 +1832,7 @@ function WorkerHome() {
     <div className="page">
       <header className="page-head">
         <div className="head-flex">
-          <div><h1>Find your quest</h1><p>Flat pay, your schedule. Grab what fits today.</p></div>
+          <div><h1>{greetText().hi}, {firstName(user.name)} {greetText().emo}</h1><p>Find a quest that fits your energy today.</p></div>
           <IconBtn icon={RefreshCw} label="Refresh board" onClick={refreshJobs} />
         </div>
       </header>
@@ -1825,6 +1875,22 @@ function WorkerHome() {
 
       <div className="search-row">
         <div className="search"><Search size={16} /><input placeholder="Search quests…" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <div className="sortbox">
+          <ArrowDownUp size={14} strokeWidth={2.4} />
+          <select className="sortsel" value={sort} onChange={e => { setSort(e.target.value); play("toggle"); }} aria-label="Sort quests">
+            <option value="smart">Best match</option>
+            <option value="soon">Soonest due</option>
+            <option value="near">Closest</option>
+            <option value="pay">Top pay</option>
+            <option value="new">Newest</option>
+          </select>
+        </div>
+        {(savedOpenCount > 0 || showSaved) && (
+          <button className={`save-toggle ${showSaved ? "on" : ""}`} onClick={() => { setShowSaved(s => !s); play("toggle"); }} aria-label={showSaved ? "Show all quests" : "Show only saved quests"} title="Saved quests">
+            <Heart size={15} strokeWidth={2.4} fill={showSaved ? "currentColor" : "none"} />
+            {savedOpenCount > 0 && <span className="st-count">{savedOpenCount}</span>}
+          </button>
+        )}
       </div>
       <div className="chips chips-scroll">
         <Chip active={cat === "All"} onClick={() => setCat("All")}>All</Chip>
@@ -1832,19 +1898,21 @@ function WorkerHome() {
       </div>
 
       {filtered.length === 0
-        ? <Empty icon={Search} title="No open quests here" body="Try another category or a wider radius — new quests land all the time." />
+        ? (showSaved
+            ? <Empty icon={Heart} title="No saved quests open right now" body="Tap the heart on any quest to save it for later. Saved quests that get claimed or expire drop off automatically." />
+            : <Empty icon={Search} title="No open quests here" body="Try another category or a wider radius — new quests land all the time." />)
         : <>
             {urgentList.length > 0 && (
               <div className="urgent-sec">
                 <div className="urgent-h"><span className="urgent-pip"><Zap size={15} strokeWidth={2.8} /></span> Urgently need covered <span className="urgent-count">{urgentList.length}</span></div>
                 <p className="urgent-sub">A quester had to step away — these are back on the board and the clock is ticking. Grab one and be the hero.</p>
-                <div className="jobgrid">{urgentList.map(({ job: j, mi }) => <BrowseCard key={j.id} job={j} distance={mi} urgent />)}</div>
+                <div className="jobgrid">{urgentList.map(({ job: j, mi }) => <BrowseCard key={j.id} job={j} distance={mi} urgent saved={saved.has(j.id)} onToggleSave={toggleSave} />)}</div>
               </div>
             )}
             {regularList.length > 0 && (
               <>
                 {urgentList.length > 0 && <h2 className="sub-h"><Search size={17} /> All open quests</h2>}
-                <div className="jobgrid">{regularList.map(({ job: j, mi }) => <BrowseCard key={j.id} job={j} distance={mi} />)}</div>
+                <div className="jobgrid">{regularList.map(({ job: j, mi }) => <BrowseCard key={j.id} job={j} distance={mi} saved={saved.has(j.id)} onToggleSave={toggleSave} />)}</div>
               </>
             )}
           </>}
@@ -2165,6 +2233,10 @@ function SettingsScreen() {
         </div>
         <Toggle icon={s.soundOn ? Volume2 : VolumeX} label="Sound effects" hint="Clicks, pops & little fanfares"
           on={s.soundOn} onChange={v => set({ soundOn: v })} />
+        {("vibrate" in navigator) && (
+          <Toggle icon={Smartphone} label="Haptic buzz" hint="A little vibration when you claim, finish & level up"
+            on={s.hapticOn !== false} onChange={v => set({ hapticOn: v })} />
+        )}
       </div>
 
       <div className="card set-card">
@@ -3470,7 +3542,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [view, setView] = useState("browse");
   const [now, setNow] = useState(Date.now());
-  const [ui, setUi] = useState({ stim: "high", soundOn: true });
+  const [ui, setUi] = useState({ stim: "high", soundOn: true, hapticOn: true });
   const [toasts, setToasts] = useState([]);
   const [confetti, setConfetti] = useState(0);
   const [focusJob, setFocusJob] = useState(null);
@@ -3488,7 +3560,7 @@ function App() {
   // clock
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   // audio sync
-  useEffect(() => { AUDIO.on = ui.soundOn; AUDIO.vol = ui.stim === "high" ? 1 : 0.5; }, [ui]);
+  useEffect(() => { AUDIO.on = ui.soundOn; AUDIO.vol = ui.stim === "high" ? 1 : 0.5; HAPTIC.on = ui.hapticOn; }, [ui]);
 
   const dismissToast = id => setToasts(t => t.filter(x => x.id !== id));
   const toast = (msg, type = "info", duration) => {
@@ -3503,7 +3575,7 @@ function App() {
 
   function applyUserUi(u) {
     const st = u.settings || {};
-    setUi({ stim: st.stim || "high", soundOn: st.soundOn !== false });
+    setUi({ stim: st.stim || "high", soundOn: st.soundOn !== false, hapticOn: st.hapticOn !== false });
   }
   function enter(u) {
     setUser(u); applyUserUi(u);
@@ -3621,7 +3693,7 @@ function App() {
       const listener = supabase.auth.onAuthStateChange((event) => {
         if (event === "SIGNED_OUT") {
           setUser(null); setJobs([]);
-          setUi({ stim: "high", soundOn: true });
+          setUi({ stim: "high", soundOn: true, hapticOn: true });
           setPhase("auth");
         }
       });
@@ -3683,7 +3755,7 @@ function App() {
   async function logout() {
     play("toggle");
     setUser(null); setJobs([]);
-    setUi({ stim: "high", soundOn: true });
+    setUi({ stim: "high", soundOn: true, hapticOn: true });
     setPhase("auth");
     try { await supabase.auth.signOut(); } catch (e) {}
   }
@@ -3701,8 +3773,9 @@ function App() {
     const up = { settings: merged };
     if (newName) up.name = newName;
     updateUser(up);
-    if (patch.stim !== undefined || patch.soundOn !== undefined) setUi({ stim: merged.stim, soundOn: merged.soundOn });
-    if (patch.stim || patch.soundOn !== undefined || newName) toast("Settings saved.", "info");
+    if (patch.stim !== undefined || patch.soundOn !== undefined || patch.hapticOn !== undefined)
+      setUi({ stim: merged.stim, soundOn: merged.soundOn, hapticOn: merged.hapticOn !== false });
+    if (patch.stim || patch.soundOn !== undefined || patch.hapticOn !== undefined || newName) toast("Settings saved.", "info");
   }
   function setEnergy(e) { saveSettings({ energy: e }); }
   function switchMode(type) {
@@ -4971,12 +5044,25 @@ em{font-style:normal;color:var(--primary)}
 .ls-r{display:flex;align-items:center;gap:5px;font-weight:700;font-family:var(--mono);color:var(--gold)}
 .energy-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .energy-label{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13.5px;color:var(--ink2)}
-.search-row{display:flex;gap:10px}
-.search{flex:1;display:flex;align-items:center;gap:9px;background:#1A0C10;border:1.5px solid var(--line2);border-radius:13px;padding:0 14px;transition:.16s}
+.search-row{display:flex;gap:10px;flex-wrap:wrap}
+.search{flex:1 1 170px;display:flex;align-items:center;gap:9px;background:#1A0C10;border:1.5px solid var(--line2);border-radius:13px;padding:0 14px;transition:.16s}
 .search:focus-within{border-color:var(--primary);box-shadow:0 0 0 4px rgba(var(--p-rgb),.16)}
 .search input{flex:1;border:none;background:none;padding:12px 0;font-size:14.5px;font-weight:500}
 .search input:focus{outline:none}
 .search svg{color:var(--muted)}
+.sortbox{display:flex;align-items:center;gap:6px;background:#1A0C10;border:1.5px solid var(--line2);border-radius:13px;padding:0 10px 0 12px;transition:.16s}
+.sortbox:focus-within{border-color:var(--primary);box-shadow:0 0 0 4px rgba(var(--p-rgb),.16)}
+.sortbox>svg{color:var(--muted);flex:none}
+.sortsel{border:none;background:none;color:var(--ink);font-family:var(--disp);font-weight:700;font-size:13px;padding:12px 4px 12px 0;cursor:pointer;-webkit-appearance:none;appearance:none}
+.sortsel:focus{outline:none}
+.sortsel option{background:#1A0C10;color:var(--ink)}
+.save-toggle{display:flex;align-items:center;gap:5px;background:#1A0C10;border:1.5px solid var(--line2);border-radius:13px;padding:0 12px;color:var(--muted);cursor:pointer;transition:.16s;flex:none}
+.save-toggle:hover{border-color:var(--primary)}
+.save-toggle.on{color:var(--primary);border-color:var(--primary);background:var(--primary-l)}
+.st-count{font-family:var(--disp);font-weight:800;font-size:12px}
+.save-heart{margin-left:auto;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:8px;transition:.14s;flex:none}
+.save-heart:hover{color:var(--primary);background:var(--primary-l)}
+.save-heart.on{color:var(--primary)}
 
 /* empty */
 .empty{text-align:center;padding:54px 24px;background:var(--card);border:1.5px dashed var(--line2);border-radius:var(--r-lg)}
