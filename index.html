@@ -2313,6 +2313,41 @@ function BugReportCard() {
     </div>
   );
 }
+// Manage everyone you've blocked: see the list and unblock anyone. Blocking is
+// the only way someone leaves your board, so this is the only way back.
+function BlockedPeopleCard() {
+  const { listMyBlocks, unblockUser } = useApp();
+  const [list, setList] = useState(null);   // null = still loading
+  const [busyId, setBusyId] = useState(null);
+  async function load() { setList(await listMyBlocks()); }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  async function doUnblock(id, name) {
+    setBusyId(id);
+    const ok = await unblockUser(id, name);
+    setBusyId(null);
+    if (ok) setList(prev => (prev || []).filter(b => b.blocked_id !== id));
+  }
+  return (
+    <div className="card set-card">
+      <h2 className="set-h"><UserX size={17} /> Blocked people</h2>
+      <p className="set-p">People you block won't be matched with you and their quests stay off your board. Unblock anyone here to undo that.</p>
+      {list === null && <div className="blk-loading"><span className="spin"><RefreshCw size={15} /></span> Loading…</div>}
+      {list !== null && list.length === 0 && <div className="blk-empty">You haven't blocked anyone.</div>}
+      {list !== null && list.length > 0 && (
+        <ul className="blk-list">
+          {list.map(b => (
+            <li key={b.blocked_id} className="blk-row">
+              <span className="blk-name">{b.blocked_name || "Blocked user"}</span>
+              <button className="blk-unblock" onClick={() => doUnblock(b.blocked_id, b.blocked_name)} disabled={busyId === b.blocked_id}>
+                {busyId === b.blocked_id ? "…" : <><UserCheck size={14} strokeWidth={2.4} /> Unblock</>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 function SettingsScreen() {
   const { user, saveSettings, logout, toast, refreshProfile, switchMode, platform, deleteAccount } = useApp();
   const s = user.settings || {};
@@ -2480,6 +2515,8 @@ function SettingsScreen() {
           </label>
         </div>
       )}
+
+      <BlockedPeopleCard />
 
       <BugReportCard />
 
@@ -3934,6 +3971,17 @@ function App() {
       setBlockedIds(new Set(Array.isArray(data) ? data : []));
     } catch (e) { /* keep what we have */ }
   }
+  // The people *I* blocked (not those who blocked me — that stays silent), with
+  // names, for the manage-and-unblock list in Settings.
+  async function listMyBlocks() {
+    try {
+      const { data } = await supabase.from("user_blocks")
+        .select("blocked_id, blocked_name, created_at")
+        .eq("blocker_id", user.id)
+        .order("created_at", { ascending: false });
+      return data || [];
+    } catch (e) { return []; }
+  }
   async function reportUser(reportedId, reportedName, jobId, reason, details, images) {
     if (!reportedId) return false;
     const { error } = await supabase.from("user_reports").insert({
@@ -3950,7 +3998,7 @@ function App() {
   async function blockUser(blockedId, blockedName) {
     if (!blockedId || blockedId === user.id) return false;
     const { error } = await supabase.from("user_blocks").insert({
-      blocker_id: user.id, blocked_id: blockedId, created_at: Date.now(),
+      blocker_id: user.id, blocked_id: blockedId, blocked_name: blockedName || "", created_at: Date.now(),
     });
     if (error && error.code !== "23505") { toast(error.message || "Couldn't block this person.", "error"); return false; }
     // Unwind any quest the two of you are mid-way through: it goes back on the
@@ -4626,7 +4674,7 @@ function App() {
     reportsOpen, refreshReportsOpen,
     adminChatUnread, refreshAdminChatUnread, adminChannelList, adminCreateGroup, adminOpenDM,
     sendTip,
-    blockedIds, refreshBlocks, reportUser, blockUser, unblockUser, reportBug,
+    blockedIds, refreshBlocks, listMyBlocks, reportUser, blockUser, unblockUser, reportBug,
   };
 
   return (
@@ -5520,6 +5568,15 @@ em{font-style:normal;color:var(--primary)}
 .att-grid-sm .att-thumb{width:150px;height:150px;max-width:100%}
 .chat-composer{display:flex;flex-direction:column}
 .chat-composer .imgpick{margin:0 0 8px;padding:0 2px}
+/* blocked-people list (Settings) */
+.blk-loading{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13.5px;font-weight:600;padding:6px 0}
+.blk-empty{color:var(--muted);font-size:13.5px;padding:6px 2px}
+.blk-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.blk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:var(--card2);border:1px solid var(--line);border-radius:11px}
+.blk-name{font-weight:700;font-size:14px;color:var(--ink);font-family:var(--disp);word-break:break-word}
+.blk-unblock{display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--line2);color:var(--muted);border-radius:9px;font-weight:700;font-size:12.5px;padding:7px 12px;cursor:pointer;font-family:var(--disp);transition:.14s;flex:none}
+.blk-unblock:hover:not(:disabled){color:var(--primary);border-color:var(--primary)}
+.blk-unblock:disabled{opacity:.6;cursor:default}
 
 /* empty */
 .empty{text-align:center;padding:54px 24px;background:var(--card);border:1.5px dashed var(--line2);border-radius:var(--r-lg)}
